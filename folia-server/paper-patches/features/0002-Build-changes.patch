@@ -42,7 +42,7 @@ index ba32d58c33c65b1384baa7616da64f7a4a1f0d1d..30815c8970b1f1c88a3c7bb5fd36efd9
 -    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/paper";
 -    private static final String REPOSITORY = "PaperMC/Paper";
 +    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/folia"; // Folia
-+    private static final String REPOSITORY = "PaperMC/Folia"; // Folia
++    private static final String REPOSITORY = "LisoSMP-de/Folia"; // Folia
      private static final ServerBuildInfo BUILD_INFO = ServerBuildInfo.buildInfo();
      private static final String USER_AGENT = BUILD_INFO.brandName() + "/" + BUILD_INFO.asString(VERSION_SIMPLE) + " (https://papermc.io)";
      private static final Gson GSON = new Gson();
