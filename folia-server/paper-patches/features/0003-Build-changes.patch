@@ -32,7 +32,7 @@ index 9f4d73fd321f6f0cd19fdd1b63068d2ea6c0816b..08745a35b1ce8cc56d970472088de3cd
                  metrics.addCustomChart(new Metrics.DrilldownPie("java_version", () -> {
                      Map<String, Map<String, Integer>> map = new HashMap<>();
 diff --git a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
-index 602d3ce2cd16405f35453ce12a207b70312a4a8a..4d2936f6818c38e2844cba78ffad339e93ff29ab 100644
+index 602d3ce2cd16405f35453ce12a207b70312a4a8a..7f8f36b98aadda5de7f1bf0a0d401620a4824baf 100644
 --- a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
 +++ b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
 @@ -40,8 +40,8 @@ public class PaperVersionFetcher implements VersionFetcher {
