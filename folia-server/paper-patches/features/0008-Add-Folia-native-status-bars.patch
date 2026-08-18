@@ -1,0 +1,260 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Tue, 18 Aug 2026 22:15:48 +0200
+Subject: [PATCH] Add Folia-native status bars
+
+
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..53906081d52cbe8da9cc1d890299c2201f159311
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+@@ -0,0 +1,177 @@
++package io.papermc.paper.threadedregions;
++
++import ca.spottedleaf.moonrise.common.time.TickData;
++import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
++import java.lang.management.ManagementFactory;
++import java.lang.management.MemoryUsage;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++import java.util.UUID;
++import java.util.concurrent.ConcurrentHashMap;
++import net.kyori.adventure.bossbar.BossBar;
++import net.kyori.adventure.text.Component;
++import net.kyori.adventure.text.format.NamedTextColor;
++import org.bukkit.Bukkit;
++import org.bukkit.NamespacedKey;
++import org.bukkit.command.CommandSender;
++import org.bukkit.command.defaults.BukkitCommand;
++import org.bukkit.entity.Player;
++import org.bukkit.persistence.PersistentDataType;
++import org.bukkit.plugin.Plugin;
++import org.jetbrains.annotations.NotNull;
++
++/** Folia-native TPS, memory, and region status bars, ported from Luminol's bar patch. */
++public final class FoliaStatusBarCommand extends BukkitCommand {
++    private static final Plugin INTERNAL_PLUGIN = new FoliaStatusBarPlugin();
++    private static final Map<BarType, Map<UUID, BossBar>> BARS = new ConcurrentHashMap<>();
++    private static ScheduledTask scannerTask;
++    private final BarType fixedType;
++
++    public FoliaStatusBarCommand() {
++        super("bar", "Toggle Folia status bars", "/bar <tps|memory|region> [on|off|toggle]", List.of("statusbar"));
++        this.setPermission("folia.command.bar");
++        this.fixedType = null;
++        for (final BarType type : BarType.values()) {
++            BARS.put(type, new ConcurrentHashMap<>());
++        }
++    }
++
++    private FoliaStatusBarCommand(final String name, final BarType type) {
++        super(name, "Toggle the Folia " + name, "/" + name + " [on|off|toggle]", List.of());
++        this.setPermission("folia.command." + name);
++        this.fixedType = type;
++    }
++
++    public static FoliaStatusBarCommand tpsBarCommand() {
++        return new FoliaStatusBarCommand("tpsbar", BarType.TPS);
++    }
++
++    public static FoliaStatusBarCommand ramBarCommand() {
++        return new FoliaStatusBarCommand("rambar", BarType.MEMORY);
++    }
++
++    public static FoliaStatusBarCommand regionBarCommand() {
++        return new FoliaStatusBarCommand("regionbar", BarType.REGION);
++    }
++
++    public static synchronized void start() {
++        if (scannerTask != null && !scannerTask.isCancelled()) return;
++        scannerTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(INTERNAL_PLUGIN, task -> {
++            for (final Player player : Bukkit.getOnlinePlayers()) {
++                for (final BarType type : BarType.values()) {
++                    if (enabled(player, type) && !BARS.get(type).containsKey(player.getUniqueId())) {
++                        schedule(player, type);
++                    }
++                }
++            }
++        }, 1L, 20L);
++    }
++
++    public static synchronized void stop() {
++        if (scannerTask != null) scannerTask.cancel();
++        scannerTask = null;
++        for (final Map<UUID, BossBar> bars : BARS.values()) bars.clear();
++    }
++
++    @Override
++    public boolean execute(@NotNull CommandSender sender, @NotNull String label, @NotNull String[] args) {
++        if (!this.testPermission(sender)) return true;
++        if (!(sender instanceof Player player)) {
++            sender.sendMessage(Component.text("This command can only be used by a player.", NamedTextColor.RED));
++            return true;
++        }
++        if (this.fixedType == null && args.length == 0) {
++            sender.sendMessage(Component.text(this.getUsage(), NamedTextColor.YELLOW));
++            return true;
++        }
++        final BarType type;
++        if (this.fixedType != null) {
++            type = this.fixedType;
++        } else {
++            try {
++                type = BarType.valueOf(args[0].toUpperCase(Locale.ROOT));
++            } catch (final IllegalArgumentException ignored) {
++                sender.sendMessage(Component.text("Unknown bar. Use tps, memory, or region.", NamedTextColor.RED));
++                return true;
++            }
++        }
++        final boolean current = enabled(player, type);
++        final int actionIndex = this.fixedType == null ? 1 : 0;
++        final boolean value = args.length <= actionIndex || args[actionIndex].equalsIgnoreCase("toggle") ? !current : args[actionIndex].equalsIgnoreCase("on");
++        player.getPersistentDataContainer().set(type.key, PersistentDataType.BYTE, value ? (byte) 1 : (byte) 0);
++        if (!value) remove(player, type);
++        sender.sendMessage(Component.text(type.name().toLowerCase(Locale.ROOT) + " bar " + (value ? "enabled" : "disabled") + ".", NamedTextColor.GREEN));
++        return true;
++    }
++
++    @Override
++    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
++        final List<String> result = new ArrayList<>();
++        if (this.fixedType == null && args.length == 1) for (final BarType type : BarType.values()) result.add(type.name().toLowerCase(Locale.ROOT));
++        if ((this.fixedType == null && args.length == 2) || (this.fixedType != null && args.length == 1)) result.addAll(List.of("on", "off", "toggle"));
++        result.removeIf(value -> !value.startsWith(args[args.length - 1].toLowerCase(Locale.ROOT)));
++        return result;
++    }
++
++    private static boolean enabled(final Player player, final BarType type) {
++        return player.getPersistentDataContainer().getOrDefault(type.key, PersistentDataType.BYTE, (byte) 0) != 0;
++    }
++
++    private static void schedule(final Player player, final BarType type) {
++        final UUID uuid = player.getUniqueId();
++        final BossBar bar = BossBar.bossBar(Component.empty(), 0.0F, BossBar.Color.GREEN, BossBar.Overlay.NOTCHED_20);
++        if (BARS.get(type).putIfAbsent(uuid, bar) != null) return;
++        player.showBossBar(bar);
++        player.getScheduler().runAtFixedRate(INTERNAL_PLUGIN, task -> {
++            if (!player.isOnline() || !enabled(player, type)) {
++                task.cancel();
++                remove(player, type);
++                return;
++            }
++            update(player, type, bar);
++        }, () -> BARS.get(type).remove(uuid), 1L, 20L);
++    }
++
++    private static void remove(final Player player, final BarType type) {
++        final BossBar bar = BARS.get(type).remove(player.getUniqueId());
++        if (bar != null) player.hideBossBar(bar);
++    }
++
++    private static void update(final Player player, final BarType type, final BossBar bar) {
++        if (type == BarType.MEMORY) {
++            final MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
++            final double ratio = Math.clamp((double) heap.getUsed() / heap.getMax(), 0.0, 1.0);
++            bar.name(Component.text("Memory: %.0f / %.0f MiB".formatted(heap.getUsed() / 1048576.0, heap.getMax() / 1048576.0)))
++                .progress((float) ratio).color(color(ratio));
++            return;
++        }
++        final ThreadedRegionizer.ThreadedRegion<TickRegions.TickRegionData, TickRegions.TickRegionSectionData> region = TickRegionScheduler.getCurrentRegion();
++        if (region == null) return;
++        final TickRegions.TickRegionData data = region.getData();
++        final TickData.TickReportData report = data.getRegionSchedulingHandle().getTickReport5s(System.nanoTime());
++        if (report == null) return;
++        final double utilisation = report.utilisation();
++        if (type == BarType.TPS) {
++            final double tps = report.tpsData().segmentAll().average();
++            final double mspt = report.timePerTickData().segmentAll().average() / 1.0E6;
++            bar.name(Component.text("TPS: %.2f  MSPT: %.2f  Ping: %d ms".formatted(tps, mspt, player.getPing())))
++                .progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(tps >= 18.0 ? BossBar.Color.GREEN : tps >= 15.0 ? BossBar.Color.YELLOW : BossBar.Color.RED);
++        } else {
++            final TickRegions.RegionStats stats = data.getRegionStats();
++            bar.name(Component.text("Region: %.1f%%  Chunks: %d  Players: %d  Entities: %d".formatted(utilisation * 100.0, stats.getChunkCount(), stats.getPlayerCount(), stats.getEntityCount())))
++                .progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(color(utilisation));
++        }
++    }
++
++    private static BossBar.Color color(final double ratio) {
++        return ratio < 0.5 ? BossBar.Color.GREEN : ratio < 0.7 ? BossBar.Color.YELLOW : BossBar.Color.RED;
++    }
++
++    private enum BarType {
++        TPS("tpsbar"), MEMORY("membar"), REGION("regionbar");
++        private final NamespacedKey key;
++        BarType(final String key) { this.key = new NamespacedKey("folia", key); }
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6260c88db139569ceb0103e20602c3c9fb1b62e
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
+@@ -0,0 +1,49 @@
++package io.papermc.paper.threadedregions;
++
++import io.papermc.paper.plugin.configuration.PluginMeta;
++import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
++import java.io.File;
++import java.io.InputStream;
++import java.util.List;
++import org.bukkit.Server;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.configuration.file.FileConfiguration;
++import org.bukkit.generator.BiomeProvider;
++import org.bukkit.generator.ChunkGenerator;
++import org.bukkit.plugin.Plugin;
++import org.bukkit.plugin.PluginBase;
++import org.bukkit.plugin.PluginDescriptionFile;
++import org.bukkit.plugin.PluginLoader;
++import org.bukkit.plugin.PluginLogger;
++import org.jetbrains.annotations.NotNull;
++import org.jetbrains.annotations.Nullable;
++
++final class FoliaStatusBarPlugin extends PluginBase {
++    private final PluginDescriptionFile description = new PluginDescriptionFile("FoliaStatusBars", "1.0", "nms");
++    @Override public @NotNull PluginDescriptionFile getDescription() { return this.description; }
++    @Override public @NotNull PluginMeta getPluginMeta() { return this.description; }
++    @Override public boolean isEnabled() { return true; }
++    @Override public File getDataFolder() { throw unsupported(); }
++    @Override public FileConfiguration getConfig() { throw unsupported(); }
++    @Override public InputStream getResource(String name) { throw unsupported(); }
++    @Override public void saveConfig() { throw unsupported(); }
++    @Override public void saveDefaultConfig() { throw unsupported(); }
++    @Override public void saveResource(String path, boolean replace) { throw unsupported(); }
++    @Override public void reloadConfig() { throw unsupported(); }
++    @Override public PluginLogger getLogger() { throw unsupported(); }
++    @Override public PluginLoader getPluginLoader() { throw unsupported(); }
++    @Override public Server getServer() { return BukkitHolder.SERVER; }
++    @Override public void onDisable() {}
++    @Override public void onLoad() {}
++    @Override public void onEnable() {}
++    @Override public boolean isNaggable() { return false; }
++    @Override public void setNaggable(boolean value) {}
++    @Override public ChunkGenerator getDefaultWorldGenerator(String world, String id) { return null; }
++    @Override public @Nullable BiomeProvider getDefaultBiomeProvider(@NotNull String world, @Nullable String id) { return null; }
++    @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) { return false; }
++    @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) { return List.of(); }
++    @Override public @NotNull LifecycleEventManager<Plugin> getLifecycleManager() { throw unsupported(); }
++    private static UnsupportedOperationException unsupported() { return new UnsupportedOperationException("Internal Folia scheduler owner"); }
++    private static final class BukkitHolder { private static final Server SERVER = org.bukkit.Bukkit.getServer(); }
++}
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index db1440b09e620ce2aa9441e92b43b0d1ab8ee7a8..d265ba9afb97e8ff1bd153da5fcdd8afedb9216b 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -413,6 +413,11 @@ public final class CraftServer implements Server {
+         Bukkit.setServer(this);
+         // Paper start
+         this.commandMap = new CraftCommandMap(this);
++        this.commandMap.register("folia", new io.papermc.paper.threadedregions.FoliaStatusBarCommand()); // Folia - status bars
++        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.tpsBarCommand()); // Folia - status bars
++        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.ramBarCommand()); // Folia - status bars
++        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.regionBarCommand()); // Folia - status bars
++        io.papermc.paper.threadedregions.FoliaStatusBarCommand.start(); // Folia - status bars
+         this.pluginManager = new SimplePluginManager(this, commandMap);
+         this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
+         this.pluginManager.paperPluginManager = this.paperPluginManager;
