@@ -5,7 +5,7 @@ Subject: [PATCH] Always keep stasis pearls loaded
 
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..d8bab42739783586646b6f85dd6c6c67e765e77e 100644
+index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..9ffb2b26d3f5844f39173e9882e9092d232d9f7c 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
 @@ -78,8 +78,8 @@ public final class ServerEntityLookup extends EntityLookup {
@@ -13,13 +13,12 @@ index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..d8bab42739783586646b6f85dd6c6c67
          }
          if (entity instanceof ThrownEnderpearl enderpearl && (oldSectionX != newSectionX || oldSectionZ != newSectionZ)) {
 -            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
--            this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
-+            this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
+             this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
 +            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
          }
          PlatformHooks.get().entityMove(
              entity,
-@@ -141,21 +150,16 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -141,18 +141,12 @@ public final class ServerEntityLookup extends EntityLookup {
      }
  
      private void addEnderPearl(final long coordinate, final int entityId) { // Folia - region threading
@@ -38,15 +37,11 @@ index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..d8bab42739783586646b6f85dd6c6c67
  
          // Folia - region threading
          ((ChunkSystemServerLevel)this.serverWorld).moonrise$getChunkTaskScheduler().chunkHolderManager
-             .removeTicketAtLevel(ENDER_PEARL_TICKER, coordinate, ChunkHolderManager.ENTITY_TICKING_TICKET_LEVEL, Integer.valueOf(entityId)); // Folia - region threading
-     }
- }
-
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 6c1ad58085e959fd0df3cb28b00d53ef3f30af90..843e721c977201ad679097f4cafb79cdd086e74f 100644
+index 7d8c528a76e6a95d27368bc459d654c6ef66dd8f..6fe8f4cb7bc896f4788141cf855f52a0ecda52a2 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -222,6 +222,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -257,6 +257,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
              int sectionPosZ = SectionPos.blockToSectionCoord(this.position().z());
              Entity entity = this.owner != null ? findOwnerIncludingDeadPlayer(serverLevel, this.owner.getUUID()) : null;
              if (entity instanceof ServerPlayer serverPlayer
