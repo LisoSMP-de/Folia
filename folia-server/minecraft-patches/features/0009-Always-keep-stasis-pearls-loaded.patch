@@ -5,10 +5,22 @@ Subject: [PATCH] Always keep stasis pearls loaded
 
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..4af7ab47b11df83b5fb4f37c0d2e04e4dc362fb7 100644
+index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..d8bab42739783586646b6f85dd6c6c67e765e77e 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-@@ -141,21 +141,16 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -78,8 +78,10 @@ public final class ServerEntityLookup extends EntityLookup {
+             ((ChunkSystemServerLevel)this.serverWorld).moonrise$getNearbyPlayers().tickPlayer(player);
+         }
+         if (entity instanceof ThrownEnderpearl enderpearl && (oldSectionX != newSectionX || oldSectionZ != newSectionZ)) {
+-            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
++            // Keep both chunks ticking while ownership moves to the destination region. Removing the old
++            // ticket first can unload the pearl in the middle of a cross-region section change.
+             this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
++            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
+         }
+         PlatformHooks.get().entityMove(
+             entity,
+@@ -141,21 +143,16 @@ public final class ServerEntityLookup extends EntityLookup {
      }
  
      private void addEnderPearl(final long coordinate, final int entityId) { // Folia - region threading
