@@ -8,19 +8,27 @@ diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/Se
 index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..d8bab42739783586646b6f85dd6c6c67e765e77e 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-@@ -78,8 +78,10 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -78,8 +78,17 @@ public final class ServerEntityLookup extends EntityLookup {
              ((ChunkSystemServerLevel)this.serverWorld).moonrise$getNearbyPlayers().tickPlayer(player);
          }
          if (entity instanceof ThrownEnderpearl enderpearl && (oldSectionX != newSectionX || oldSectionZ != newSectionZ)) {
 -            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
-+            // Keep both chunks ticking while ownership moves to the destination region. Removing the old
-+            // ticket first can unload the pearl in the middle of a cross-region section change.
-             this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
-+            this.removeEnderPearl(CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ), enderpearl.getId()); // Folia - region threading
+-            this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
++            final long oldCoordinate = CoordinateUtils.getChunkKey(oldSectionX, oldSectionZ); // Folia - region threading
++            this.addEnderPearl(CoordinateUtils.getChunkKey(newSectionX, newSectionZ), enderpearl.getId()); // Folia - region threading
++            // Folia start - region threading - The destination ticket is processed asynchronously. Keep the
++            // source chunk alive for one more tick so a region handoff cannot unload the pearl between the
++            // section move and the destination ticket becoming effective.
++            enderpearl.getBukkitEntity().taskScheduler.schedule(
++                (Entity scheduledEntity) -> this.removeEnderPearl(oldCoordinate, scheduledEntity.getId()),
++                (Entity retiredEntity) -> this.removeEnderPearl(oldCoordinate, retiredEntity.getId()),
++                1L
++            );
++            // Folia end - region threading
          }
          PlatformHooks.get().entityMove(
              entity,
-@@ -141,21 +143,16 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -141,21 +150,16 @@ public final class ServerEntityLookup extends EntityLookup {
      }
  
      private void addEnderPearl(final long coordinate, final int entityId) { // Folia - region threading
