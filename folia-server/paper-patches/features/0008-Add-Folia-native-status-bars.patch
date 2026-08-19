@@ -246,15 +246,13 @@ diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/ja
 index db1440b09e620ce2aa9441e92b43b0d1ab8ee7a8..d265ba9afb97e8ff1bd153da5fcdd8afedb9216b 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-@@ -413,6 +413,11 @@ public final class CraftServer implements Server {
-         Bukkit.setServer(this);
-         // Paper start
-         this.commandMap = new CraftCommandMap(this);
+@@ -416,4 +416,9 @@ public final class CraftServer implements Server {
+         this.pluginManager = new SimplePluginManager(this, commandMap);
+         this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
+         this.pluginManager.paperPluginManager = this.paperPluginManager;
 +        this.commandMap.register("folia", new io.papermc.paper.threadedregions.FoliaStatusBarCommand()); // Folia - status bars
 +        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.tpsBarCommand()); // Folia - status bars
 +        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.ramBarCommand()); // Folia - status bars
 +        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.regionBarCommand()); // Folia - status bars
 +        io.papermc.paper.threadedregions.FoliaStatusBarCommand.start(); // Folia - status bars
-         this.pluginManager = new SimplePluginManager(this, commandMap);
-         this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
-         this.pluginManager.paperPluginManager = this.paperPluginManager;
+          // Paper end
