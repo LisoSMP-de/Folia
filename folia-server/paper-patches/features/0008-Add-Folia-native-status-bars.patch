@@ -243,10 +243,10 @@ index 0000000000000000000000000000000000000000..c6260c88db139569ceb0103e20602c3c
 +    private static final class BukkitHolder { private static final Server SERVER = org.bukkit.Bukkit.getServer(); }
 +}
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-index db1440b09e620ce2aa9441e92b43b0d1ab8ee7a8..d265ba9afb97e8ff1bd153da5fcdd8afedb9216b 100644
+index db1440b09e620ce2aa9441e92b43b0d1ab8ee7a8..eb4aa11e53118fd0932677e51692a7bc72a34dbe 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-@@ -416,4 +416,9 @@ public final class CraftServer implements Server {
+@@ -416,6 +416,11 @@ public final class CraftServer implements Server {
          this.pluginManager = new SimplePluginManager(this, commandMap);
          this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
          this.pluginManager.paperPluginManager = this.paperPluginManager;
@@ -256,3 +256,5 @@ index db1440b09e620ce2aa9441e92b43b0d1ab8ee7a8..d265ba9afb97e8ff1bd153da5fcdd8af
 +        this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.regionBarCommand()); // Folia - status bars
 +        io.papermc.paper.threadedregions.FoliaStatusBarCommand.start(); // Folia - status bars
           // Paper end
+ 
+         CraftRegistry.setMinecraftRegistry(console.registryAccess());

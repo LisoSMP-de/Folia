@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@agent.com>
+Date: Wed, 19 Aug 2026 20:10:00 +0200
+Subject: [PATCH] Add status bar persistence
+
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 22f749776160015518efab557d94e93159b8ccda..01e067a0045e59094bf271c448f158f932199aa3 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -226,3 +226,6 @@
+     private static final boolean DEFAULT_SEEN_CREDITS = false;
+     private static final boolean DEFAULT_SPAWN_EXTRA_PARTICLES_ON_FALL = false;
++    public boolean tpsBarEnabled = false;
++    public boolean memBarEnabled = false;
++    public boolean regionBarEnabled = false;
+     public ServerGamePacketListenerImpl connection;
+@@ -650,3 +653,6 @@
+         this.spawnExtraParticlesOnFall = input.getBooleanOr( spawn_extra_particles_on_fall, false);
+         this.raidOmenPosition = input.read(aid_omen_position, BlockPos.CODEC).orElse(null);
++        this.tpsBarEnabled = input.getBooleanOr(	psbarEnabled, false);
++        this.memBarEnabled = input.getBooleanOr(membarEnabled, false);
++        this.regionBarEnabled = input.getBooleanOr(egionbarEnabled, false);
+         // Paper start - Expand PlayerGameModeChangeEvent
+@@ -682,3 +688,6 @@
+         output.putBoolean(spawn_extra_particles_on_fall, this.spawnExtraParticlesOnFall);
+         output.storeNullable(aid_omen_position, BlockPos.CODEC, this.raidOmenPosition);
++        output.putBoolean(	psbarEnabled, this.tpsBarEnabled);
++        output.putBoolean(membarEnabled, this.memBarEnabled);
++        output.putBoolean(egionbarEnabled, this.regionBarEnabled);
+         this.saveEnderPearls(output);
