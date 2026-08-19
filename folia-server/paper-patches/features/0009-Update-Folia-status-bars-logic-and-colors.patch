@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Wed, 19 Aug 2026 20:12:17 +0200
+Subject: [PATCH] Update Folia status bars logic and colors
+
+
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+index 53906081d52cbe8da9cc1d890299c2201f159311..ac0b7c760c0066b8ccdf80c1a8942ffd4c6def5b 100644
+--- a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+@@ -10,6 +10,8 @@ import java.util.Locale;
+ import java.util.Map;
+ import java.util.UUID;
+ import java.util.concurrent.ConcurrentHashMap;
++import net.kyori.adventure.text.minimessage.MiniMessage;
++import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+ import net.kyori.adventure.bossbar.BossBar;
+ import net.kyori.adventure.text.Component;
+ import net.kyori.adventure.text.format.NamedTextColor;
+@@ -100,7 +102,12 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+         final boolean current = enabled(player, type);
+         final int actionIndex = this.fixedType == null ? 1 : 0;
+         final boolean value = args.length <= actionIndex || args[actionIndex].equalsIgnoreCase("toggle") ? !current : args[actionIndex].equalsIgnoreCase("on");
+-        player.getPersistentDataContainer().set(type.key, PersistentDataType.BYTE, value ? (byte) 1 : (byte) 0);
++        final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer) player).getHandle();
++        switch (type) {
++            case TPS -> handle.tpsBarEnabled = value;
++            case MEMORY -> handle.memBarEnabled = value;
++            case REGION -> handle.regionBarEnabled = value;
++        }
+         if (!value) remove(player, type);
+         sender.sendMessage(Component.text(type.name().toLowerCase(Locale.ROOT) + " bar " + (value ? "enabled" : "disabled") + ".", NamedTextColor.GREEN));
+         return true;
+@@ -116,7 +123,12 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     }
+ 
+     private static boolean enabled(final Player player, final BarType type) {
+-        return player.getPersistentDataContainer().getOrDefault(type.key, PersistentDataType.BYTE, (byte) 0) != 0;
++        final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer) player).getHandle();
++        return switch (type) {
++            case TPS -> handle.tpsBarEnabled;
++            case MEMORY -> handle.memBarEnabled;
++            case REGION -> handle.regionBarEnabled;
++        };
+     }
+ 
+     private static void schedule(final Player player, final BarType type) {
+@@ -140,11 +152,25 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     }
+ 
+     private static void update(final Player player, final BarType type, final BossBar bar) {
++        final MiniMessage mm = MiniMessage.miniMessage();
+         if (type == BarType.MEMORY) {
+             final MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+-            final double ratio = Math.clamp((double) heap.getUsed() / heap.getMax(), 0.0, 1.0);
+-            bar.name(Component.text("Memory: %.0f / %.0f MiB".formatted(heap.getUsed() / 1048576.0, heap.getMax() / 1048576.0)))
+-                .progress((float) ratio).color(color(ratio));
++            final long used = heap.getUsed();
++            final long max = heap.getMax();
++            final double percent = Math.clamp((double) used / max, 0.0, 1.0);
++
++            final BossBar.Color barCol = barColorFromMemory(percent);
++            final String usedColor = barCol.name();
++            final Component usedComp = mm.deserialize("<" + usedColor + ">" + String.format("%.2f", used / 1048576.0) + "</" + usedColor + ">");
++            final Component maxComp = mm.deserialize("<GREEN>" + String.format("%.2f", max / 1048576.0) + "</GREEN>");
++
++            final Component msg = mm.deserialize(
++                "<gray>Memory usage <yellow>:</yellow> <used>MB<yellow>/</yellow><available>MB",
++                Placeholder.component("used", usedComp),
++                Placeholder.component("available", maxComp)
++            );
++
++            bar.name(msg).progress((float) percent).color(barCol);
+             return;
+         }
+         final ThreadedRegionizer.ThreadedRegion<TickRegions.TickRegionData, TickRegions.TickRegionSectionData> region = TickRegionScheduler.getCurrentRegion();
+@@ -156,17 +182,85 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+         if (type == BarType.TPS) {
+             final double tps = report.tpsData().segmentAll().average();
+             final double mspt = report.timePerTickData().segmentAll().average() / 1.0E6;
+-            bar.name(Component.text("TPS: %.2f  MSPT: %.2f  Ping: %d ms".formatted(tps, mspt, player.getPing())))
+-                .progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(tps >= 18.0 ? BossBar.Color.GREEN : tps >= 15.0 ? BossBar.Color.YELLOW : BossBar.Color.RED);
++
++            final BossBar.Color tpsCol = barColorFromTps(tps);
++            final String tpsColorStr = tpsCol.name();
++            final Component tpsComp = mm.deserialize("<" + tpsColorStr + ">" + String.format("%.2f", tps) + "</" + tpsColorStr + ">");
++
++            final BossBar.Color msptCol = barColorFromMspt(mspt);
++            final String msptColorStr = msptCol.name();
++            final Component msptComp = mm.deserialize("<" + msptColorStr + ">" + String.format("%.2f", mspt) + "</" + msptColorStr + ">");
++
++            final int ping = player.getPing();
++            final BossBar.Color pingCol = barColorFromPing(ping);
++            final String pingColorStr = pingCol.name();
++            final Component pingComp = mm.deserialize("<" + pingColorStr + ">" + ping + "</" + pingColorStr + ">");
++
++            final Component chunkHotComp = mm.deserialize("<GREEN>0</GREEN>");
++
++            final Component msg = mm.deserialize(
++                "<gray>TPS<yellow>:</yellow> <tps> MSPT<yellow>:</yellow> <mspt> Ping<yellow>:</yellow> <ping>ms ChunkHot<yellow>:</yellow> <chunkhot>",
++                Placeholder.component("tps", tpsComp),
++                Placeholder.component("mspt", msptComp),
++                Placeholder.component("ping", pingComp),
++                Placeholder.component("chunkhot", chunkHotComp)
++            );
++
++            bar.name(msg).progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(tpsCol);
+         } else {
+             final TickRegions.RegionStats stats = data.getRegionStats();
+-            bar.name(Component.text("Region: %.1f%%  Chunks: %d  Players: %d  Entities: %d".formatted(utilisation * 100.0, stats.getChunkCount(), stats.getPlayerCount(), stats.getEntityCount())))
+-                .progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(color(utilisation));
++            final double utilisationPercent = utilisation * 100.0;
++            final String formattedUtil = String.format(Locale.ROOT, "%.1f", utilisationPercent);
++
++            final BossBar.Color utilCol = barColorFromUtil(utilisationPercent);
++            final String utilColorStr = utilCol.name();
++            final Component utilComp = mm.deserialize("<" + utilColorStr + ">" + formattedUtil + "%</" + utilColorStr + ">");
++
++            final Component chunksComp = mm.deserialize(String.valueOf(stats.getChunkCount()));
++            final Component playersComp = mm.deserialize(String.valueOf(stats.getPlayerCount()));
++            final Component entitiesComp = mm.deserialize(String.valueOf(stats.getEntityCount()));
++
++            final Component msg = mm.deserialize(
++                "<gray>Util<yellow>:</yellow> <util> Chunks<yellow>:</yellow> <green><chunks></green> Players<yellow>:</yellow> <green><players></green> Entities<yellow>:</yellow> <green><entities></green>",
++                Placeholder.component("util", utilComp),
++                Placeholder.component("chunks", chunksComp),
++                Placeholder.component("players", playersComp),
++                Placeholder.component("entities", entitiesComp)
++            );
++
++            bar.name(msg).progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(utilCol);
+         }
+     }
+ 
+-    private static BossBar.Color color(final double ratio) {
+-        return ratio < 0.5 ? BossBar.Color.GREEN : ratio < 0.7 ? BossBar.Color.YELLOW : BossBar.Color.RED;
++    private static BossBar.Color barColorFromMemory(double memPercent) {
++        if (memPercent <= 0.50) return BossBar.Color.GREEN;
++        if (memPercent <= 0.70) return BossBar.Color.YELLOW;
++        return BossBar.Color.RED;
++    }
++
++    private static BossBar.Color barColorFromTps(double tps) {
++        if (tps >= 18) return BossBar.Color.GREEN;
++        if (tps >= 15) return BossBar.Color.YELLOW;
++        return BossBar.Color.RED;
++    }
++
++    private static BossBar.Color barColorFromMspt(double mspt) {
++        if (mspt <= 25) return BossBar.Color.GREEN;
++        if (mspt <= 50) return BossBar.Color.YELLOW;
++        return BossBar.Color.RED;
++    }
++
++    private static BossBar.Color barColorFromPing(int ping) {
++        if (ping <= 80) return BossBar.Color.GREEN;
++        if (ping <= 160) return BossBar.Color.YELLOW;
++        return BossBar.Color.RED;
++    }
++
++    private static BossBar.Color barColorFromUtil(double util) {
++        if (util > 100) return BossBar.Color.PURPLE;
++        if (util >= 70) return BossBar.Color.RED;
++        if (util >= 50) return BossBar.Color.YELLOW;
++        return BossBar.Color.GREEN;
+     }
+ 
+     private enum BarType {
