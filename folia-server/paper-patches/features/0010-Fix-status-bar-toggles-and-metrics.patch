@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Wed, 19 Aug 2026 21:11:29 +0200
+Subject: [PATCH] Fix status bar toggles and metrics
+
+
+diff --git a/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e965c63d2a0
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
+@@ -0,0 +1,53 @@
++package io.papermc.paper.threadedregions;
++
++import java.util.Arrays;
++
++/** Rolling per-chunk tick-time sampler, ported from Luminol's KioCG ChunkHot implementation. */
++public final class ChunkHot {
++    private static final int SAMPLE_WINDOWS = 10;
++    private static final long MAX_SAMPLE_NANOS = 1_000_000L;
++    private final long[] times = new long[SAMPLE_WINDOWS];
++    private int index = -1;
++    private long previous;
++    private long total;
++    private long startedAt;
++    private boolean sampling;
++    private int nesting;
++
++    public void nextWindow() {
++        this.index = (this.index + 1) % SAMPLE_WINDOWS;
++        this.previous = this.times[this.index];
++        this.times[this.index] = 0L;
++        this.sampling = true;
++    }
++
++    public void finishWindow() {
++        if (!this.sampling) return;
++        this.sampling = false;
++        this.nesting = 0;
++        this.total += this.times[this.index] - this.previous;
++    }
++
++    public void startTicking() {
++        if (!this.sampling || this.nesting++ != 0) return;
++        this.startedAt = System.nanoTime();
++    }
++
++    public void stopTickingAndCount() {
++        if (!this.sampling || this.nesting <= 0 || --this.nesting != 0) return;
++        this.times[this.index] += Math.min(System.nanoTime() - this.startedAt, MAX_SAMPLE_NANOS);
++    }
++
++    public void clear() {
++        this.sampling = false;
++        this.nesting = 0;
++        Arrays.fill(this.times, 0L);
++        this.previous = 0L;
++        this.total = 0L;
++        this.startedAt = 0L;
++    }
++
++    public long average() {
++        return this.total / (SAMPLE_WINDOWS * 20L);
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+index ac0b7c760c0066b8ccdf80c1a8942ffd4c6def5b..6112f63c091ea500e978326b3effe0b7f89f5932 100644
+--- a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+@@ -108,7 +108,11 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+             case MEMORY -> handle.memBarEnabled = value;
+             case REGION -> handle.regionBarEnabled = value;
+         }
+-        if (!value) remove(player, type);
++        if (value) {
++            schedule(player, type);
++        } else {
++            remove(player, type);
++        }
+         sender.sendMessage(Component.text(type.name().toLowerCase(Locale.ROOT) + " bar " + (value ? "enabled" : "disabled") + ".", NamedTextColor.GREEN));
+         return true;
+     }
+@@ -191,12 +195,13 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+             final String msptColorStr = msptCol.name();
+             final Component msptComp = mm.deserialize("<" + msptColorStr + ">" + String.format("%.2f", mspt) + "</" + msptColorStr + ">");
+
+-            final int ping = player.getPing();
++            final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer)player).getHandle();
++            final int ping = handle.connection.latency();
+             final BossBar.Color pingCol = barColorFromPing(ping);
+-            final String pingColorStr = pingCol.name();
+-            final Component pingComp = mm.deserialize("<" + pingColorStr + ">" + ping + "</" + pingColorStr + ">");
++            final Component pingComp = Component.text(ping, textColor(pingCol));
+
+-            final Component chunkHotComp = mm.deserialize("<GREEN>0</GREEN>");
++            final long chunkHot = handle.folia$getNearbyChunkHot();
++            final Component chunkHotComp = Component.text(chunkHot, textColor(barColorFromChunkHot(chunkHot)));
+
+             final Component msg = mm.deserialize(
+                 "<gray>TPS<yellow>:</yellow> <tps> MSPT<yellow>:</yellow> <mspt> Ping<yellow>:</yellow> <ping>ms ChunkHot<yellow>:</yellow> <chunkhot>",
+@@ -251,11 +256,30 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     }
+
+     private static BossBar.Color barColorFromPing(int ping) {
++        if (ping < 0) return BossBar.Color.PURPLE;
+         if (ping <= 80) return BossBar.Color.GREEN;
+         if (ping <= 160) return BossBar.Color.YELLOW;
+         return BossBar.Color.RED;
+     }
+
++    private static BossBar.Color barColorFromChunkHot(long chunkHot) {
++        if (chunkHot < 0) return BossBar.Color.PURPLE;
++        if (chunkHot <= 300_000L) return BossBar.Color.GREEN;
++        if (chunkHot <= 500_000L) return BossBar.Color.YELLOW;
++        return BossBar.Color.RED;
++    }
++
++    private static NamedTextColor textColor(final BossBar.Color color) {
++        return switch (color) {
++            case PINK, PURPLE -> NamedTextColor.LIGHT_PURPLE;
++            case BLUE -> NamedTextColor.BLUE;
++            case RED -> NamedTextColor.RED;
++            case YELLOW -> NamedTextColor.YELLOW;
++            case WHITE -> NamedTextColor.WHITE;
++            case GREEN -> NamedTextColor.GREEN;
++        };
++    }
++
+     private static BossBar.Color barColorFromUtil(double util) {
+         if (util > 100) return BossBar.Color.PURPLE;
+         if (util >= 70) return BossBar.Color.RED;
