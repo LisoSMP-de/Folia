@@ -1,4 +1,4 @@
-﻿From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
 Date: Wed, 19 Aug 2026 21:13:34 +0200
 Subject: [PATCH] Fix status bar persistence and add ChunkHot metrics
