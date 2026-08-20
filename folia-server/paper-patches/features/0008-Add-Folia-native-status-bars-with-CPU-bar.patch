@@ -12,10 +12,10 @@ Fix status bar toggles and metrics
 Add CPU bar with Canvas gradient colors
 ---
  .../paper/threadedregions/ChunkHot.java       |  53 +++
- .../FoliaStatusBarCommand.java                | 375 ++++++++++++++++++
+ .../FoliaStatusBarCommand.java                | 349 ++++++++++++++++++
  .../threadedregions/FoliaStatusBarPlugin.java |  49 +++
  .../org/bukkit/craftbukkit/CraftServer.java   |   6 +
- 4 files changed, 483 insertions(+)
+ 4 files changed, 457 insertions(+)
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
@@ -81,16 +81,18 @@ index 000000000..c89bbb78f
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 000000000..0ef4cf984
+index 000000000..0ef4cf985
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,349 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
 +import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 +import java.lang.management.ManagementFactory;
 +import java.lang.management.MemoryUsage;
++import java.nio.file.Files;
++import java.nio.file.Path;
 +import java.util.ArrayList;
 +import java.util.List;
 +import java.util.Locale;
@@ -293,11 +295,38 @@ index 000000000..0ef4cf984
 +        if (util >= 50) return GRAD_YELLOW;
 +        return GRAD_GREEN;
 +    }
++    private static String tempGradient(final double tempC) {
++        if (tempC <= 60.0D) return GRAD_GREEN;
++        if (tempC <= 80.0D) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
 +    private static BossBar.Color barColorForGrad(final String grad) {
 +        if (GRAD_GREEN.equals(grad)) return BossBar.Color.GREEN;
 +        if (GRAD_YELLOW.equals(grad)) return BossBar.Color.YELLOW;
 +        if (GRAD_PURPLE.equals(grad)) return BossBar.Color.PURPLE;
 +        return BossBar.Color.RED;
++    }
++
++    // --- CPU temperature detection ---
++    private static final boolean TEMP_AVAILABLE;
++    private static final Path TEMP_PATH = Path.of("/sys/class/thermal/thermal_zone0/temp");
++    static {
++        boolean avail = false;
++        try {
++            if (Files.isReadable(TEMP_PATH)) {
++                Long.parseLong(Files.readString(TEMP_PATH).trim());
++                avail = true;
++            }
++        } catch (final Throwable ignored) {}
++        TEMP_AVAILABLE = avail;
++    }
++    private static double readCpuTempC() {
++        if (!TEMP_AVAILABLE) return Double.NaN;
++        try {
++            return Long.parseLong(Files.readString(TEMP_PATH).trim()) / 1000.0D;
++        } catch (final Throwable ignored) {
++            return Double.NaN;
++        }
 +    }
 +
 +    private static void remove(final Player player, final BarType type) {
@@ -337,8 +366,16 @@ index 000000000..0ef4cf984
 +            final double maxPercent = Math.max(1.0D, procs * 100.0D);
 +            final double ratio = Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
 +            final String g = cpuGradient(ratio);
-+            final Component display = mm.deserialize("<gray>CPU: " + g + String.format(Locale.ROOT, "%.2f", smoothedCpuPercent) + GRAD_END + "/" + g + String.format(Locale.ROOT, "%.2f", maxPercent) + GRAD_END + " (" + g + String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D) + GRAD_END + ")");
-+            bar.name(display).progress((float) ratio).color(barColorForGrad(g));
++            final StringBuilder sb = new StringBuilder();
++            sb.append("<gray>CPU: ").append(g).append(String.format(Locale.ROOT, "%.2f", smoothedCpuPercent)).append(GRAD_END);
++            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
++            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
++            final double tempC = readCpuTempC();
++            if (!Double.isNaN(tempC)) {
++                final String gT = tempGradient(tempC);
++                sb.append(" Temp<yellow>:</yellow> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
++            }
++            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
 +            return;
 +        }
 +        if (type == BarType.MEMORY) {
