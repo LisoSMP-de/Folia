@@ -12,10 +12,10 @@ Fix status bar toggles and metrics
 Add CPU bar with Canvas gradient colors
 ---
  .../paper/threadedregions/ChunkHot.java       |  53 +++
- .../FoliaStatusBarCommand.java                | 351 ++++++++++++++++++
+ .../FoliaStatusBarCommand.java                | 375 ++++++++++++++++++
  .../threadedregions/FoliaStatusBarPlugin.java |  49 +++
  .../org/bukkit/craftbukkit/CraftServer.java   |   6 +
- 4 files changed, 459 insertions(+)
+ 4 files changed, 483 insertions(+)
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
  create mode 100644 src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
@@ -81,10 +81,10 @@ index 000000000..c89bbb78f
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 000000000..0ef4cf983
+index 000000000..0ef4cf984
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,375 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -248,14 +248,55 @@ index 000000000..0ef4cf983
 +    private static double smoothedCpuPercent = 0.0D;
 +    private static boolean hasSmoothed = false;
 +
++    // --- shared gradient constants ---
++    private static final String GRAD_GREEN  = "<gradient:#55ff55:#00aa00>";
++    private static final String GRAD_YELLOW = "<gradient:#ffff55:#ffaa00>";
++    private static final String GRAD_RED    = "<gradient:#ff5555:#aa0000>";
++    private static final String GRAD_PURPLE = "<gradient:#ff55ff:#aa00aa>";
++    private static final String GRAD_END    = "</gradient>";
++
 +    private static String cpuGradient(final double ratio) {
-+        if (ratio <= 0.50D) return "<gradient:#55ff55:#00aa00>";
-+        if (ratio <= 0.70D) return "<gradient:#ffff55:#ffaa00>";
-+        return "<gradient:#ff5555:#aa0000>";
++        if (ratio <= 0.50D) return GRAD_GREEN;
++        if (ratio <= 0.70D) return GRAD_YELLOW;
++        return GRAD_RED;
 +    }
-+    private static BossBar.Color barColorFromCpu(final double ratio) {
-+        if (ratio <= 0.50D) return BossBar.Color.GREEN;
-+        if (ratio <= 0.70D) return BossBar.Color.YELLOW;
++    private static String memGradient(final double ratio) {
++        if (ratio <= 0.50D) return GRAD_GREEN;
++        if (ratio <= 0.70D) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String tpsGradient(final double tps) {
++        if (tps >= 18) return GRAD_GREEN;
++        if (tps >= 15) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String msptGradient(final double mspt) {
++        if (mspt <= 25) return GRAD_GREEN;
++        if (mspt <= 50) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String pingGradient(final int ping) {
++        if (ping < 0) return GRAD_PURPLE;
++        if (ping <= 80) return GRAD_GREEN;
++        if (ping <= 160) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String chunkHotGradient(final long chunkHot) {
++        if (chunkHot < 0) return GRAD_PURPLE;
++        if (chunkHot <= 300_000L) return GRAD_GREEN;
++        if (chunkHot <= 500_000L) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String utilGradient(final double util) {
++        if (util > 100) return GRAD_PURPLE;
++        if (util >= 70) return GRAD_RED;
++        if (util >= 50) return GRAD_YELLOW;
++        return GRAD_GREEN;
++    }
++    private static BossBar.Color barColorForGrad(final String grad) {
++        if (GRAD_GREEN.equals(grad)) return BossBar.Color.GREEN;
++        if (GRAD_YELLOW.equals(grad)) return BossBar.Color.YELLOW;
++        if (GRAD_PURPLE.equals(grad)) return BossBar.Color.PURPLE;
 +        return BossBar.Color.RED;
 +    }
 +
@@ -295,9 +336,9 @@ index 000000000..0ef4cf983
 +            }
 +            final double maxPercent = Math.max(1.0D, procs * 100.0D);
 +            final double ratio = Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
-+            final String grad = cpuGradient(ratio);
-+            final Component display = mm.deserialize("<gray>CPU: " + grad + String.format(Locale.ROOT, "%.2f", smoothedCpuPercent) + "</gradient>/" + grad + String.format(Locale.ROOT, "%.2f", maxPercent) + "</gradient> (" + grad + String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D) + "</gradient>)");
-+            bar.name(display).progress((float) ratio).color(barColorFromCpu(ratio));
++            final String g = cpuGradient(ratio);
++            final Component display = mm.deserialize("<gray>CPU: " + g + String.format(Locale.ROOT, "%.2f", smoothedCpuPercent) + GRAD_END + "/" + g + String.format(Locale.ROOT, "%.2f", maxPercent) + GRAD_END + " (" + g + String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D) + GRAD_END + ")");
++            bar.name(display).progress((float) ratio).color(barColorForGrad(g));
 +            return;
 +        }
 +        if (type == BarType.MEMORY) {
@@ -305,19 +346,11 @@ index 000000000..0ef4cf983
 +            final long used = heap.getUsed();
 +            final long max = heap.getMax();
 +            final double percent = Math.clamp((double) used / max, 0.0, 1.0);
-+
-+            final BossBar.Color barCol = barColorFromMemory(percent);
-+            final String usedColor = barCol.name();
-+            final Component usedComp = mm.deserialize("<" + usedColor + ">" + String.format("%.2f", used / 1048576.0) + "</" + usedColor + ">");
-+            final Component maxComp = mm.deserialize("<GREEN>" + String.format("%.2f", max / 1048576.0) + "</GREEN>");
-+
-+            final Component msg = mm.deserialize(
-+                "<gray>Memory usage <yellow>:</yellow> <used>MB<yellow>/</yellow><available>MB",
-+                Placeholder.component("used", usedComp),
-+                Placeholder.component("available", maxComp)
-+            );
-+
-+            bar.name(msg).progress((float) percent).color(barCol);
++            final String gUsed = memGradient(percent);
++            final String usedStr = gUsed + String.format("%.2f", used / 1048576.0) + GRAD_END;
++            final String maxStr = GRAD_GREEN + String.format("%.2f", max / 1048576.0) + GRAD_END;
++            final Component msg = mm.deserialize("<gray>Memory usage <yellow>:</yellow> " + usedStr + "MB<yellow>/</yellow>" + maxStr + "MB");
++            bar.name(msg).progress((float) percent).color(barColorForGrad(gUsed));
 +            return;
 +        }
 +        final ThreadedRegionizer.ThreadedRegion<TickRegions.TickRegionData, TickRegions.TickRegionSectionData> region = TickRegionScheduler.getCurrentRegion();
@@ -329,105 +362,33 @@ index 000000000..0ef4cf983
 +        if (type == BarType.TPS) {
 +            final double tps = report.tpsData().segmentAll().average();
 +            final double mspt = report.timePerTickData().segmentAll().average() / 1.0E6;
-+
-+            final BossBar.Color tpsCol = barColorFromTps(tps);
-+            final String tpsColorStr = tpsCol.name();
-+            final Component tpsComp = mm.deserialize("<" + tpsColorStr + ">" + String.format("%.2f", tps) + "</" + tpsColorStr + ">");
-+
-+            final BossBar.Color msptCol = barColorFromMspt(mspt);
-+            final String msptColorStr = msptCol.name();
-+            final Component msptComp = mm.deserialize("<" + msptColorStr + ">" + String.format("%.2f", mspt) + "</" + msptColorStr + ">");
-+
++            final String gTps = tpsGradient(tps);
++            final String gMspt = msptGradient(mspt);
 +            final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer)player).getHandle();
 +            final int ping = handle.connection.latency();
-+            final BossBar.Color pingCol = barColorFromPing(ping);
-+            final Component pingComp = Component.text(ping, textColor(pingCol));
-+
++            final String gPing = pingGradient(ping);
 +            final long chunkHot = handle.folia$getNearbyChunkHot();
-+            final Component chunkHotComp = Component.text(chunkHot, textColor(barColorFromChunkHot(chunkHot)));
-+
++            final String gChunk = chunkHotGradient(chunkHot);
 +            final Component msg = mm.deserialize(
-+                "<gray>TPS<yellow>:</yellow> <tps> MSPT<yellow>:</yellow> <mspt> Ping<yellow>:</yellow> <ping>ms ChunkHot<yellow>:</yellow> <chunkhot>",
-+                Placeholder.component("tps", tpsComp),
-+                Placeholder.component("mspt", msptComp),
-+                Placeholder.component("ping", pingComp),
-+                Placeholder.component("chunkhot", chunkHotComp)
++                "<gray>TPS<yellow>:</yellow> " + gTps + String.format("%.2f", tps) + GRAD_END
++                + " MSPT<yellow>:</yellow> " + gMspt + String.format("%.2f", mspt) + GRAD_END
++                + " Ping<yellow>:</yellow> " + gPing + ping + "ms" + GRAD_END
++                + " ChunkHot<yellow>:</yellow> " + gChunk + chunkHot + GRAD_END
 +            );
-+
-+            bar.name(msg).progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(tpsCol);
++            bar.name(msg).progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(barColorForGrad(gTps));
 +        } else {
 +            final TickRegions.RegionStats stats = data.getRegionStats();
 +            final double utilisationPercent = utilisation * 100.0;
 +            final String formattedUtil = String.format(Locale.ROOT, "%.1f", utilisationPercent);
-+
-+            final BossBar.Color utilCol = barColorFromUtil(utilisationPercent);
-+            final String utilColorStr = utilCol.name();
-+            final Component utilComp = mm.deserialize("<" + utilColorStr + ">" + formattedUtil + "%</" + utilColorStr + ">");
-+
-+            final Component chunksComp = mm.deserialize(String.valueOf(stats.getChunkCount()));
-+            final Component playersComp = mm.deserialize(String.valueOf(stats.getPlayerCount()));
-+            final Component entitiesComp = mm.deserialize(String.valueOf(stats.getEntityCount()));
-+
++            final String gUtil = utilGradient(utilisationPercent);
 +            final Component msg = mm.deserialize(
-+                "<gray>Util<yellow>:</yellow> <util> Chunks<yellow>:</yellow> <green><chunks></green> Players<yellow>:</yellow> <green><players></green> Entities<yellow>:</yellow> <green><entities></green>",
-+                Placeholder.component("util", utilComp),
-+                Placeholder.component("chunks", chunksComp),
-+                Placeholder.component("players", playersComp),
-+                Placeholder.component("entities", entitiesComp)
++                "<gray>Util<yellow>:</yellow> " + gUtil + formattedUtil + "%" + GRAD_END
++                + " Chunks<yellow>:</yellow> " + GRAD_GREEN + stats.getChunkCount() + GRAD_END
++                + " Players<yellow>:</yellow> " + GRAD_GREEN + stats.getPlayerCount() + GRAD_END
++                + " Entities<yellow>:</yellow> " + GRAD_GREEN + stats.getEntityCount() + GRAD_END
 +            );
-+
-+            bar.name(msg).progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(utilCol);
++            bar.name(msg).progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(barColorForGrad(gUtil));
 +        }
-+    }
-+
-+    private static BossBar.Color barColorFromMemory(double memPercent) {
-+        if (memPercent <= 0.50) return BossBar.Color.GREEN;
-+        if (memPercent <= 0.70) return BossBar.Color.YELLOW;
-+        return BossBar.Color.RED;
-+    }
-+
-+    private static BossBar.Color barColorFromTps(double tps) {
-+        if (tps >= 18) return BossBar.Color.GREEN;
-+        if (tps >= 15) return BossBar.Color.YELLOW;
-+        return BossBar.Color.RED;
-+    }
-+
-+    private static BossBar.Color barColorFromMspt(double mspt) {
-+        if (mspt <= 25) return BossBar.Color.GREEN;
-+        if (mspt <= 50) return BossBar.Color.YELLOW;
-+        return BossBar.Color.RED;
-+    }
-+
-+    private static BossBar.Color barColorFromPing(int ping) {
-+        if (ping < 0) return BossBar.Color.PURPLE;
-+        if (ping <= 80) return BossBar.Color.GREEN;
-+        if (ping <= 160) return BossBar.Color.YELLOW;
-+        return BossBar.Color.RED;
-+    }
-+
-+    private static BossBar.Color barColorFromChunkHot(long chunkHot) {
-+        if (chunkHot < 0) return BossBar.Color.PURPLE;
-+        if (chunkHot <= 300_000L) return BossBar.Color.GREEN;
-+        if (chunkHot <= 500_000L) return BossBar.Color.YELLOW;
-+        return BossBar.Color.RED;
-+    }
-+
-+    private static NamedTextColor textColor(final BossBar.Color color) {
-+        return switch (color) {
-+            case PINK, PURPLE -> NamedTextColor.LIGHT_PURPLE;
-+            case BLUE -> NamedTextColor.BLUE;
-+            case RED -> NamedTextColor.RED;
-+            case YELLOW -> NamedTextColor.YELLOW;
-+            case WHITE -> NamedTextColor.WHITE;
-+            case GREEN -> NamedTextColor.GREEN;
-+        };
-+    }
-+
-+    private static BossBar.Color barColorFromUtil(double util) {
-+        if (util > 100) return BossBar.Color.PURPLE;
-+        if (util >= 70) return BossBar.Color.RED;
-+        if (util >= 50) return BossBar.Color.YELLOW;
-+        return BossBar.Color.GREEN;
 +    }
 +
 +    private enum BarType {
