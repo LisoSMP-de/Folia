@@ -84,7 +84,7 @@ new file mode 100644
 index 000000000..0ef4cf985
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,383 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -93,6 +93,8 @@ index 000000000..0ef4cf985
 +import java.lang.management.MemoryUsage;
 +import java.nio.file.Files;
 +import java.nio.file.Path;
++import java.io.BufferedReader;
++import java.io.InputStreamReader;
 +import java.util.ArrayList;
 +import java.util.List;
 +import java.util.Locale;
@@ -296,8 +298,8 @@ index 000000000..0ef4cf985
 +        return GRAD_GREEN;
 +    }
 +    private static String tempGradient(final double tempC) {
-+        if (tempC <= 60.0D) return GRAD_GREEN;
-+        if (tempC <= 80.0D) return GRAD_YELLOW;
++        if (tempC < 73.0D) return GRAD_GREEN;
++        if (tempC < 80.0D) return GRAD_YELLOW;
 +        return GRAD_RED;
 +    }
 +    private static BossBar.Color barColorForGrad(final String grad) {
@@ -308,25 +310,57 @@ index 000000000..0ef4cf985
 +    }
 +
 +    // --- CPU temperature detection ---
-+    private static final boolean TEMP_AVAILABLE;
++    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
++    private static final boolean LINUX_TEMP_AVAILABLE;
 +    private static final Path TEMP_PATH = Path.of("/sys/class/thermal/thermal_zone0/temp");
 +    static {
 +        boolean avail = false;
 +        try {
-+            if (Files.isReadable(TEMP_PATH)) {
++            if (!IS_WINDOWS && Files.isReadable(TEMP_PATH)) {
 +                Long.parseLong(Files.readString(TEMP_PATH).trim());
 +                avail = true;
 +            }
 +        } catch (final Throwable ignored) {}
-+        TEMP_AVAILABLE = avail;
++        LINUX_TEMP_AVAILABLE = avail;
 +    }
++    private static volatile double cachedWinTemp = Double.NaN;
++    private static volatile long lastWinTempRead = 0L;
++    private static final long WIN_TEMP_CACHE_NS = 2_000_000_000L; // cache 2s
 +    private static double readCpuTempC() {
-+        if (!TEMP_AVAILABLE) return Double.NaN;
-+        try {
-+            return Long.parseLong(Files.readString(TEMP_PATH).trim()) / 1000.0D;
-+        } catch (final Throwable ignored) {
-+            return Double.NaN;
++        if (LINUX_TEMP_AVAILABLE) {
++            try {
++                return Long.parseLong(Files.readString(TEMP_PATH).trim()) / 1000.0D;
++            } catch (final Throwable ignored) {
++                return Double.NaN;
++            }
 +        }
++        if (IS_WINDOWS) {
++            final long now = System.nanoTime();
++            if (now - lastWinTempRead < WIN_TEMP_CACHE_NS && !Double.isNaN(cachedWinTemp)) return cachedWinTemp;
++            cachedWinTemp = readWindowsCpuTemp();
++            lastWinTempRead = now;
++            return cachedWinTemp;
++        }
++        return Double.NaN;
++    }
++    // ponytail: WMI MSAcpi_ThermalZoneTemperature needs admin rights; silently NaN if unavailable
++    private static double readWindowsCpuTemp() {
++        try {
++            final Process p = new ProcessBuilder(
++                "powershell", "-NoProfile", "-Command",
++                "(Get-CimInstance -Namespace root/WMI -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -First 1).CurrentTemperature"
++            ).redirectErrorStream(true).start();
++            String line;
++            try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                line = r.readLine();
++            }
++            p.waitFor();
++            if (line != null && !line.isBlank()) {
++                // WMI returns tenths of Kelvin
++                return (Double.parseDouble(line.trim()) / 10.0D) - 273.15D;
++            }
++        } catch (final Throwable ignored) {}
++        return Double.NaN;
 +    }
 +
 +    private static void remove(final Player player, final BarType type) {
