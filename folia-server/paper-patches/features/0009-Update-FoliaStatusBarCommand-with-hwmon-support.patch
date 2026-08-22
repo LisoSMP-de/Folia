@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 03:33:05 +0200
+Subject: [PATCH] Update FoliaStatusBarCommand with hwmon support
+
+
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+index a82f707f61557534cf88bebf802eb09e1414f85c..d8cc96181e7e5994ed4ba77687634859eb738d52 100644
+--- a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+@@ -225,15 +225,45 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     // --- CPU temperature detection ---
+     private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+     private static final boolean LINUX_TEMP_AVAILABLE;
+-    private static final Path TEMP_PATH = Path.of("/sys/class/thermal/thermal_zone0/temp");
++    private static final Path LINUX_TEMP_PATH;
+     static {
+         boolean avail = false;
++        Path foundPath = null;
+         try {
+-            if (!IS_WINDOWS && Files.isReadable(TEMP_PATH)) {
+-                Long.parseLong(Files.readString(TEMP_PATH).trim());
+-                avail = true;
++            if (!IS_WINDOWS) {
++                final Path zone0 = Path.of("/sys/class/thermal/thermal_zone0/temp");
++                if (Files.isReadable(zone0)) {
++                    Long.parseLong(Files.readString(zone0).trim());
++                    foundPath = zone0;
++                    avail = true;
++                } else {
++                    for (int i = 0; i < 10; i++) {
++                        final Path hwmonPath = Path.of("/sys/class/hwmon/hwmon" + i + "/temp1_input");
++                        if (Files.isReadable(hwmonPath)) {
++                            Long.parseLong(Files.readString(hwmonPath).trim());
++                            foundPath = hwmonPath;
++                            avail = true;
++                            break;
++                        }
++                    }
++                    if (!avail) {
++                        for (int i = 0; i < 10; i++) {
++                            for (int t = 2; t <= 5; t++) {
++                                final Path hwmonPath = Path.of("/sys/class/hwmon/hwmon" + i + "/temp" + t + "_input");
++                                if (Files.isReadable(hwmonPath)) {
++                                    Long.parseLong(Files.readString(hwmonPath).trim());
++                                    foundPath = hwmonPath;
++                                    avail = true;
++                                    break;
++                                }
++                            }
++                            if (avail) break;
++                        }
++                    }
++                }
+             }
+         } catch (final Throwable ignored) {}
++        LINUX_TEMP_PATH = foundPath;
+         LINUX_TEMP_AVAILABLE = avail;
+     }
+     private static volatile double cachedWinTemp = Double.NaN;
+@@ -242,7 +272,7 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     private static double readCpuTempC() {
+         if (LINUX_TEMP_AVAILABLE) {
+             try {
+-                return Long.parseLong(Files.readString(TEMP_PATH).trim()) / 1000.0D;
++                return Long.parseLong(Files.readString(LINUX_TEMP_PATH).trim()) / 1000.0D;
+             } catch (final Throwable ignored) {
+                 return Double.NaN;
+             }
