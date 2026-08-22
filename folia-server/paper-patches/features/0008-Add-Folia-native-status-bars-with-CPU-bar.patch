@@ -1,15 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
-Date: Tue, 18 Aug 2026 22:15:48 +0200
+Date: Sat, 22 Aug 2026 15:25:33 +0200
 Subject: [PATCH] Add Folia-native status bars with CPU bar
 
-Add Folia-native status bars
-
-Update Folia status bars logic and colors
-
-Fix status bar toggles and metrics
-
-Add CPU bar with Canvas gradient colors
 
 diff --git a/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
 new file mode 100644
@@ -72,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..a82f707f61557534cf88bebf802eb09e1414f85c
+index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a37de9f3d
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,444 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -303,15 +296,76 @@ index 0000000000000000000000000000000000000000..a82f707f61557534cf88bebf802eb09e
 +    // --- CPU temperature detection ---
 +    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
 +    private static final boolean LINUX_TEMP_AVAILABLE;
-+    private static final Path TEMP_PATH = Path.of("/sys/class/thermal/thermal_zone0/temp");
++    private static final Path LINUX_TEMP_PATH;
 +    static {
 +        boolean avail = false;
++        Path foundPath = null;
 +        try {
-+            if (!IS_WINDOWS && Files.isReadable(TEMP_PATH)) {
-+                Long.parseLong(Files.readString(TEMP_PATH).trim());
-+                avail = true;
++            if (!IS_WINDOWS) {
++                final Path hwmonDir = Path.of("/sys/class/hwmon");
++                if (Files.isDirectory(hwmonDir)) {
++                    try (var stream = Files.newDirectoryStream(hwmonDir, "hwmon*")) {
++                        for (Path dir : stream) {
++                            Path nameFile = dir.resolve("name");
++                            if (Files.isReadable(nameFile)) {
++                                String name = Files.readString(nameFile).trim().toLowerCase(Locale.ROOT);
++                                if (name.contains("k10temp") || name.contains("coretemp") || name.contains("cpu") || name.contains("zenpower")) {
++                                    for (int t = 1; t <= 8; t++) {
++                                        Path p = dir.resolve("temp" + t + "_input");
++                                        if (Files.isReadable(p)) {
++                                            try {
++                                                Long.parseLong(Files.readString(p).trim());
++                                                foundPath = p;
++                                                avail = true;
++                                                break;
++                                            } catch (Throwable ignored) {}
++                                        }
++                                    }
++                                }
++                            }
++                            if (avail) break;
++                        }
++                    }
++                }
++                if (!avail) {
++                    final Path zone0 = Path.of("/sys/class/thermal/thermal_zone0/temp");
++                    if (Files.isReadable(zone0)) {
++                        try {
++                            Long.parseLong(Files.readString(zone0).trim());
++                            foundPath = zone0;
++                            avail = true;
++                        } catch (Throwable ignored) {}
++                    }
++                }
++                if (!avail && Files.isDirectory(hwmonDir)) {
++                    try (var stream = Files.newDirectoryStream(hwmonDir, "hwmon*")) {
++                        for (Path dir : stream) {
++                            Path nameFile = dir.resolve("name");
++                            String name = "";
++                            if (Files.isReadable(nameFile)) {
++                                name = Files.readString(nameFile).trim().toLowerCase(Locale.ROOT);
++                            }
++                            if (name.contains("nvme") || name.contains("amdgpu") || name.contains("nouveau") || name.contains("radeon")) {
++                                continue;
++                            }
++                            for (int t = 1; t <= 8; t++) {
++                                Path p = dir.resolve("temp" + t + "_input");
++                                if (Files.isReadable(p)) {
++                                    try {
++                                        Long.parseLong(Files.readString(p).trim());
++                                        foundPath = p;
++                                        avail = true;
++                                        break;
++                                    } catch (Throwable ignored) {}
++                                }
++                            }
++                            if (avail) break;
++                        }
++                    }
++                }
 +            }
 +        } catch (final Throwable ignored) {}
++        LINUX_TEMP_PATH = foundPath;
 +        LINUX_TEMP_AVAILABLE = avail;
 +    }
 +    private static volatile double cachedWinTemp = Double.NaN;
@@ -320,7 +374,7 @@ index 0000000000000000000000000000000000000000..a82f707f61557534cf88bebf802eb09e
 +    private static double readCpuTempC() {
 +        if (LINUX_TEMP_AVAILABLE) {
 +            try {
-+                return Long.parseLong(Files.readString(TEMP_PATH).trim()) / 1000.0D;
++                return Long.parseLong(Files.readString(LINUX_TEMP_PATH).trim()) / 1000.0D;
 +            } catch (final Throwable ignored) {
 +                return Double.NaN;
 +            }
