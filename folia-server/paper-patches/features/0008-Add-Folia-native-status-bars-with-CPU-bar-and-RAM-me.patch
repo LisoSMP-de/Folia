@@ -68,7 +68,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059b78e5fc2
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,666 @@
+@@ -0,0 +1,671 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -393,7 +393,7 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            try {
 +                final Process p = new ProcessBuilder(
 +                    "powershell", "-NoProfile", "-Command",
-+                    "& { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Maximum).Maximum; if (-not $s) { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Speed -Maximum).Maximum }; $s }"
++                    "& { try { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Maximum).Maximum; if (-not $s) { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Speed -Maximum).Maximum }; $s } catch { } }"
 +                ).redirectErrorStream(true).start();
 +                String line;
 +                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
@@ -661,20 +661,14 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
 +            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
 +            final double clockGhz = readCpuClockGhz();
-+            sb.append(" Clock<gray>:</gray> ");
 +            if (!Double.isNaN(clockGhz)) {
 +                final String gC = clockGradient(clockGhz);
-+                sb.append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
-+            } else {
-+                sb.append("<dark_gray>N/A</dark_gray>");
++                sb.append(" Clock<gray>:</gray> ").append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
 +            }
 +            final double tempC = readCpuTempC();
-+            sb.append(" Temp<gray>:</gray> ");
 +            if (!Double.isNaN(tempC)) {
 +                final String gT = tempGradient(tempC);
-+                sb.append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
-+            } else {
-+                sb.append("<dark_gray>N/A</dark_gray>");
++                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
 +            }
 +            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
 +            return;
@@ -685,9 +679,20 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final long max = heap.getMax();
 +            final double percent = Math.clamp((double) used / max, 0.0, 1.0);
 +            final String gUsed = memGradient(percent);
-+            final String usedStr = gUsed + String.format("%.2f", used / 1048576.0) + GRAD_END;
-+            final String maxStr = GRAD_GREEN + String.format("%.2f", max / 1048576.0) + GRAD_END;
-+            final Component msg = mm.deserialize("<gray>Memory usage <gray>:</gray> " + usedStr + "MB<yellow>/</yellow>" + maxStr + "MB");
++            final String usedStr = gUsed + String.format(Locale.ROOT, "%.2fGB", used / 1073741824.0D) + GRAD_END;
++            final String maxStr = GRAD_GREEN + String.format(Locale.ROOT, "%.2fGB", max / 1073741824.0D) + GRAD_END;
++            final StringBuilder sb = new StringBuilder();
++            sb.append("<gray>Memory usage<gray>:</gray> ").append(usedStr).append("<yellow>/</yellow>").append(maxStr);
++            final double ramClockMhz = readRamClockMhz();
++            if (!Double.isNaN(ramClockMhz)) {
++                sb.append(" Clock<gray>:</gray> ").append(GRAD_GREEN).append(String.format(Locale.ROOT, "%.0fMHz", ramClockMhz)).append(GRAD_END);
++            }
++            final double ramTempC = readRamTempC();
++            if (!Double.isNaN(ramTempC)) {
++                final String gT = tempGradient(ramTempC);
++                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", ramTempC)).append(GRAD_END);
++            }
++            final Component msg = mm.deserialize(sb.toString());
 +            bar.name(msg).progress((float) percent).color(barColorForGrad(gUsed));
 +            return;
 +        }
