@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
-Date: Sat, 22 Aug 2026 15:25:33 +0200
+Date: Mon, 24 Aug 2026 22:26:22 +0200
 Subject: [PATCH] Add Folia-native status bars with CPU bar
 
 
@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a37de9f3d
+index 0000000000000000000000000000000000000000..6e288057eb635b4ec7127fd54cdc9944ae572c5b
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,444 @@
+@@ -0,0 +1,549 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -84,6 +84,7 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +import java.util.Locale;
 +import java.util.Map;
 +import java.util.UUID;
++import java.util.logging.Logger;
 +import java.util.concurrent.ConcurrentHashMap;
 +import net.kyori.adventure.text.minimessage.MiniMessage;
 +import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -101,6 +102,7 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +
 +/** Folia-native TPS, memory, and region status bars, ported from Luminol's bar patch. */
 +public final class FoliaStatusBarCommand extends BukkitCommand {
++    private static final Logger LOGGER = Bukkit.getLogger();
 +    private static final Plugin INTERNAL_PLUGIN = new FoliaStatusBarPlugin();
 +    private static final Map<BarType, Map<UUID, BossBar>> BARS = new ConcurrentHashMap<>();
 +    private static ScheduledTask scannerTask;
@@ -286,6 +288,11 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +        if (tempC < 80.0D) return GRAD_YELLOW;
 +        return GRAD_RED;
 +    }
++    private static String clockGradient(final double clockGhz) {
++        if (clockGhz >= 4.0D) return GRAD_GREEN;
++        if (clockGhz >= 2.5D) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
 +    private static BossBar.Color barColorForGrad(final String grad) {
 +        if (GRAD_GREEN.equals(grad)) return BossBar.Color.GREEN;
 +        if (GRAD_YELLOW.equals(grad)) return BossBar.Color.YELLOW;
@@ -297,6 +304,8 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
 +    private static final boolean LINUX_TEMP_AVAILABLE;
 +    private static final Path LINUX_TEMP_PATH;
++    private static boolean warnedTempFail = false;
++    private static boolean warnedClockFail = false;
 +    static {
 +        boolean avail = false;
 +        Path foundPath = null;
@@ -368,6 +377,75 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +        LINUX_TEMP_PATH = foundPath;
 +        LINUX_TEMP_AVAILABLE = avail;
 +    }
++
++    // --- CPU clock frequency detection ---
++    private static final Path LINUX_FREQ_MAX_PATH = Path.of("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
++    private static final Path LINUX_CPUINFO_PATH = Path.of("/proc/cpuinfo");
++    private static volatile double cachedWinClock = Double.NaN;
++    private static volatile long lastWinClockRead = 0L;
++    private static final long WIN_CLOCK_CACHE_NS = 2_000_000_000L; // cache 2s
++
++    private static double readCpuClockGhz() {
++        if (!IS_WINDOWS) {
++            try {
++                if (Files.isReadable(LINUX_FREQ_MAX_PATH)) {
++                    final long khz = Long.parseLong(Files.readString(LINUX_FREQ_MAX_PATH).trim());
++                    return khz / 1_000_000.0D;
++                }
++                if (Files.isReadable(LINUX_CPUINFO_PATH)) {
++                    for (final String line : Files.readAllLines(LINUX_CPUINFO_PATH)) {
++                        if (line.toLowerCase(Locale.ROOT).startsWith("cpu mhz")) {
++                            final String[] parts = line.split(":", 2);
++                            if (parts.length == 2) {
++                                return Double.parseDouble(parts[1].trim()) / 1000.0D;
++                            }
++                        }
++                    }
++                }
++            } catch (final Throwable t) {
++                if (!warnedClockFail) {
++                    LOGGER.warning("[FoliaStatusBars] Failed to read CPU clock on Linux: " + t.getMessage());
++                    warnedClockFail = true;
++                }
++                return Double.NaN;
++            }
++            if (!warnedClockFail) {
++                LOGGER.warning("[FoliaStatusBars] CPU clock source not found on Linux (/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq or /proc/cpuinfo)");
++                warnedClockFail = true;
++            }
++            return Double.NaN;
++        }
++        final long now = System.nanoTime();
++        if (now - lastWinClockRead < WIN_CLOCK_CACHE_NS && !Double.isNaN(cachedWinClock)) return cachedWinClock;
++        cachedWinClock = readWindowsCpuClockGhz();
++        lastWinClockRead = now;
++        return cachedWinClock;
++    }
++
++    private static double readWindowsCpuClockGhz() {
++        try {
++            final Process p = new ProcessBuilder(
++                "powershell", "-NoProfile", "-Command",
++                "(Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation | Where-Object Name -eq '_Total').ActualFrequency"
++            ).redirectErrorStream(true).start();
++            String line;
++            try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                line = r.readLine();
++            }
++            p.waitFor();
++            if (line != null && !line.isBlank()) {
++                final double mhz = Double.parseDouble(line.trim());
++                return mhz / 1000.0D;
++            }
++        } catch (final Throwable t) {
++            if (!warnedClockFail) {
++                LOGGER.warning("[FoliaStatusBars] Failed to read CPU clock on Windows: " + t.getMessage());
++                warnedClockFail = true;
++            }
++        }
++        return Double.NaN;
++    }
++
 +    private static volatile double cachedWinTemp = Double.NaN;
 +    private static volatile long lastWinTempRead = 0L;
 +    private static final long WIN_TEMP_CACHE_NS = 2_000_000_000L; // cache 2s
@@ -375,9 +453,16 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +        if (LINUX_TEMP_AVAILABLE) {
 +            try {
 +                return Long.parseLong(Files.readString(LINUX_TEMP_PATH).trim()) / 1000.0D;
-+            } catch (final Throwable ignored) {
++            } catch (final Throwable t) {
++                if (!warnedTempFail) {
++                    LOGGER.warning("[FoliaStatusBars] Failed to read CPU temp on Linux: " + t.getMessage());
++                    warnedTempFail = true;
++                }
 +                return Double.NaN;
 +            }
++        } else if (!IS_WINDOWS && !warnedTempFail) {
++            LOGGER.warning("[FoliaStatusBars] CPU temperature source not found on Linux (/sys/class/hwmon or /sys/class/thermal).");
++            warnedTempFail = true;
 +        }
 +        if (IS_WINDOWS) {
 +            final long now = System.nanoTime();
@@ -388,7 +473,7 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +        }
 +        return Double.NaN;
 +    }
-+    // ponytail: WMI MSAcpi_ThermalZoneTemperature needs admin rights; silently NaN if unavailable
++
 +    private static double readWindowsCpuTemp() {
 +        try {
 +            final Process p = new ProcessBuilder(
@@ -404,7 +489,16 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +                // WMI returns tenths of Kelvin
 +                return (Double.parseDouble(line.trim()) / 10.0D) - 273.15D;
 +            }
-+        } catch (final Throwable ignored) {}
++        } catch (final Throwable t) {
++            if (!warnedTempFail) {
++                LOGGER.warning("[FoliaStatusBars] Failed to read CPU temperature on Windows: " + t.getMessage());
++                warnedTempFail = true;
++            }
++        }
++        if (!warnedTempFail) {
++            LOGGER.warning("[FoliaStatusBars] CPU temperature unavailable on Windows (WMI MSAcpi_ThermalZoneTemperature not supported or requires elevated privileges). Displaying N/A.");
++            warnedTempFail = true;
++        }
 +        return Double.NaN;
 +    }
 +
@@ -449,10 +543,21 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +            sb.append("<gray>CPU: ").append(g).append(String.format(Locale.ROOT, "%.2f", smoothedCpuPercent)).append(GRAD_END);
 +            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
 +            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
++            final double clockGhz = readCpuClockGhz();
++            sb.append(" Clock<yellow>:</yellow> ");
++            if (!Double.isNaN(clockGhz)) {
++                final String gC = clockGradient(clockGhz);
++                sb.append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
++            } else {
++                sb.append("<dark_gray>N/A</dark_gray>");
++            }
 +            final double tempC = readCpuTempC();
++            sb.append(" Temp<yellow>:</yellow> ");
 +            if (!Double.isNaN(tempC)) {
 +                final String gT = tempGradient(tempC);
-+                sb.append(" Temp<yellow>:</yellow> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
++                sb.append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
++            } else {
++                sb.append("<dark_gray>N/A</dark_gray>");
 +            }
 +            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
 +            return;
@@ -513,6 +618,7 @@ index 0000000000000000000000000000000000000000..0d5bab3fe964c09cc82629224873249a
 +        BarType(final String key) { this.key = new NamespacedKey("folia", key); }
 +    }
 +}
+\ No newline at end of file
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..c6260c88db139569ceb0103e20602c3c9fb1b62e
