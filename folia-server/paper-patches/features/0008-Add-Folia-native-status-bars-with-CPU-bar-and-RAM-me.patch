@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
-Date: Mon, 24 Aug 2026 22:26:22 +0200
-Subject: [PATCH] Add Folia-native status bars with CPU bar
+Date: Mon, 24 Aug 2026 22:56:18 +0200
+Subject: [PATCH] Add Folia-native status bars with CPU bar and RAM metrics
 
 
 diff --git a/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
@@ -65,11 +65,11 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..6e288057eb635b4ec7127fd54cdc9944ae572c5b
+index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059b78e5fc2
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,549 @@
-+package io.papermc.paper.threadedregions;
+@@ -0,0 +1,666 @@
++﻿package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
 +import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
@@ -376,6 +376,123 @@ index 0000000000000000000000000000000000000000..6e288057eb635b4ec7127fd54cdc9944
 +        } catch (final Throwable ignored) {}
 +        LINUX_TEMP_PATH = foundPath;
 +        LINUX_TEMP_AVAILABLE = avail;
++    }
++
++    // --- RAM hardware metrics (Clock & Temperature) ---
++    private static volatile double cachedRamClockMhz = Double.NaN;
++    private static volatile long lastRamClockRead = 0L;
++    private static final long RAM_CLOCK_CACHE_NS = 10_000_000_000L; // cache 10s
++    private static volatile double cachedRamTemp = Double.NaN;
++    private static volatile long lastRamTempRead = 0L;
++    private static final long RAM_TEMP_CACHE_NS = 2_000_000_000L; // cache 2s
++
++    private static double readRamClockMhz() {
++        final long now = System.nanoTime();
++        if (now - lastRamClockRead < RAM_CLOCK_CACHE_NS && !Double.isNaN(cachedRamClockMhz)) return cachedRamClockMhz;
++        if (IS_WINDOWS) {
++            try {
++                final Process p = new ProcessBuilder(
++                    "powershell", "-NoProfile", "-Command",
++                    "& { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Maximum).Maximum; if (-not $s) { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Speed -Maximum).Maximum }; $s }"
++                ).redirectErrorStream(true).start();
++                String line;
++                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                    while ((line = r.readLine()) != null) {
++                        line = line.trim();
++                        if (!line.isEmpty()) {
++                            try {
++                                cachedRamClockMhz = Double.parseDouble(line);
++                                lastRamClockRead = now;
++                                return cachedRamClockMhz;
++                            } catch (final Throwable ignored) {}
++                        }
++                    }
++                }
++                p.waitFor();
++            } catch (final Throwable ignored) {}
++        } else {
++            try {
++                final Process p = new ProcessBuilder("sh", "-c", "dmidecode -t memory 2>/dev/null || lshw -class memory 2>/dev/null").redirectErrorStream(true).start();
++                double maxSpeed = Double.NaN;
++                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                    String line;
++                    while ((line = r.readLine()) != null) {
++                        line = line.trim();
++                        if (line.startsWith("Configured Memory Speed:") || line.startsWith("Speed:") || line.startsWith("clock:")) {
++                            final String[] parts = line.split(":", 2);
++                            if (parts.length == 2) {
++                                final String val = parts[1].replace("MT/s", "").replace("MHz", "").replace("GHz", "000").trim();
++                                try {
++                                    final double sp = Double.parseDouble(val);
++                                    if (Double.isNaN(maxSpeed) || sp > maxSpeed) maxSpeed = sp;
++                                } catch (final Throwable ignored) {}
++                            }
++                        }
++                    }
++                }
++                p.waitFor();
++                if (!Double.isNaN(maxSpeed)) {
++                    cachedRamClockMhz = maxSpeed;
++                    lastRamClockRead = now;
++                    return cachedRamClockMhz;
++                }
++            } catch (final Throwable ignored) {}
++        }
++        return Double.NaN;
++    }
++
++    private static double readRamTempC() {
++        final long now = System.nanoTime();
++        if (now - lastRamTempRead < RAM_TEMP_CACHE_NS && !Double.isNaN(cachedRamTemp)) return cachedRamTemp;
++        if (!IS_WINDOWS) {
++            try {
++                final Path hwmonDir = Path.of("/sys/class/hwmon");
++                if (Files.isDirectory(hwmonDir)) {
++                    try (var stream = Files.newDirectoryStream(hwmonDir, "hwmon*")) {
++                        for (Path dir : stream) {
++                            Path nameFile = dir.resolve("name");
++                            if (Files.isReadable(nameFile)) {
++                                String name = Files.readString(nameFile).trim().toLowerCase(Locale.ROOT);
++                                if (name.contains("jc42") || name.contains("dimm") || name.contains("spd5118") || name.contains("dram") || name.contains("ddr")) {
++                                    for (int t = 1; t <= 8; t++) {
++                                        Path p = dir.resolve("temp" + t + "_input");
++                                        if (Files.isReadable(p)) {
++                                            try {
++                                                cachedRamTemp = Long.parseLong(Files.readString(p).trim()) / 1000.0D;
++                                                lastRamTempRead = now;
++                                                return cachedRamTemp;
++                                            } catch (Throwable ignored) {}
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            } catch (final Throwable ignored) {}
++        } else {
++            try {
++                final Process p = new ProcessBuilder(
++                    "powershell", "-NoProfile", "-Command",
++                    "& { Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor -ErrorAction SilentlyContinue | Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -like '*RAM*' -or $_.Name -like '*Memory*') } | Select-Object -ExpandProperty Value -First 1 }"
++                ).redirectErrorStream(true).start();
++                String line;
++                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                    while ((line = r.readLine()) != null) {
++                        line = line.trim();
++                        if (!line.isEmpty()) {
++                            try {
++                                cachedRamTemp = Double.parseDouble(line);
++                                lastRamTempRead = now;
++                                return cachedRamTemp;
++                            } catch (final Throwable ignored) {}
++                        }
++                    }
++                }
++                p.waitFor();
++            } catch (final Throwable ignored) {}
++        }
++        return Double.NaN;
 +    }
 +
 +    // --- CPU clock frequency detection ---
