@@ -69,7 +69,7 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 @@ -0,0 +1,666 @@
-+﻿package io.papermc.paper.threadedregions;
++package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
 +import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
@@ -657,11 +657,11 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final double ratio = Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
 +            final String g = cpuGradient(ratio);
 +            final StringBuilder sb = new StringBuilder();
-+            sb.append("<gray>CPU: ").append(g).append(String.format(Locale.ROOT, "%.2f", smoothedCpuPercent)).append(GRAD_END);
++            sb.append("<gray>CPU<gray>:</gray> ").append(g).append(String.format(Locale.ROOT, "%.2f", smoothedCpuPercent)).append(GRAD_END);
 +            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
 +            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
 +            final double clockGhz = readCpuClockGhz();
-+            sb.append(" Clock<yellow>:</yellow> ");
++            sb.append(" Clock<gray>:</gray> ");
 +            if (!Double.isNaN(clockGhz)) {
 +                final String gC = clockGradient(clockGhz);
 +                sb.append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
@@ -669,7 +669,7 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +                sb.append("<dark_gray>N/A</dark_gray>");
 +            }
 +            final double tempC = readCpuTempC();
-+            sb.append(" Temp<yellow>:</yellow> ");
++            sb.append(" Temp<gray>:</gray> ");
 +            if (!Double.isNaN(tempC)) {
 +                final String gT = tempGradient(tempC);
 +                sb.append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
@@ -687,7 +687,7 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final String gUsed = memGradient(percent);
 +            final String usedStr = gUsed + String.format("%.2f", used / 1048576.0) + GRAD_END;
 +            final String maxStr = GRAD_GREEN + String.format("%.2f", max / 1048576.0) + GRAD_END;
-+            final Component msg = mm.deserialize("<gray>Memory usage <yellow>:</yellow> " + usedStr + "MB<yellow>/</yellow>" + maxStr + "MB");
++            final Component msg = mm.deserialize("<gray>Memory usage <gray>:</gray> " + usedStr + "MB<yellow>/</yellow>" + maxStr + "MB");
 +            bar.name(msg).progress((float) percent).color(barColorForGrad(gUsed));
 +            return;
 +        }
@@ -708,10 +708,10 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final long chunkHot = handle.folia$getNearbyChunkHot();
 +            final String gChunk = chunkHotGradient(chunkHot);
 +            final Component msg = mm.deserialize(
-+                "<gray>TPS<yellow>:</yellow> " + gTps + String.format("%.2f", tps) + GRAD_END
-+                + " MSPT<yellow>:</yellow> " + gMspt + String.format("%.2f", mspt) + GRAD_END
-+                + " Ping<yellow>:</yellow> " + gPing + ping + "ms" + GRAD_END
-+                + " ChunkHot<yellow>:</yellow> " + gChunk + chunkHot + GRAD_END
++                "<gray>TPS<gray>:</gray> " + gTps + String.format("%.2f", tps) + GRAD_END
++                + " MSPT<gray>:</gray> " + gMspt + String.format("%.2f", mspt) + GRAD_END
++                + " Ping<gray>:</gray> " + gPing + ping + "ms" + GRAD_END
++                + " ChunkHot<gray>:</gray> " + gChunk + chunkHot + GRAD_END
 +            );
 +            bar.name(msg).progress((float) Math.clamp(mspt / 50.0, 0.0, 1.0)).color(barColorForGrad(gTps));
 +        } else {
@@ -720,10 +720,10 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final String formattedUtil = String.format(Locale.ROOT, "%.1f", utilisationPercent);
 +            final String gUtil = utilGradient(utilisationPercent);
 +            final Component msg = mm.deserialize(
-+                "<gray>Util<yellow>:</yellow> " + gUtil + formattedUtil + "%" + GRAD_END
-+                + " Chunks<yellow>:</yellow> " + GRAD_GREEN + stats.getChunkCount() + GRAD_END
-+                + " Players<yellow>:</yellow> " + GRAD_GREEN + stats.getPlayerCount() + GRAD_END
-+                + " Entities<yellow>:</yellow> " + GRAD_GREEN + stats.getEntityCount() + GRAD_END
++                "<gray>Util<gray>:</gray> " + gUtil + formattedUtil + "%" + GRAD_END
++                + " Chunks<gray>:</gray> " + GRAD_GREEN + stats.getChunkCount() + GRAD_END
++                + " Players<gray>:</gray> " + GRAD_GREEN + stats.getPlayerCount() + GRAD_END
++                + " Entities<gray>:</gray> " + GRAD_GREEN + stats.getEntityCount() + GRAD_END
 +            );
 +            bar.name(msg).progress((float) Math.clamp(utilisation, 0.0, 1.0)).color(barColorForGrad(gUtil));
 +        }
