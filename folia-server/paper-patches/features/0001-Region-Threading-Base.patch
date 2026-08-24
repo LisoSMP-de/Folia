@@ -412,9 +412,18 @@ index bd68139ae635f2ad7ec8e7a21e0056a139c4c62e..48a43341b17247355a531164019d5cc9
      }
  
 diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
-index e47f279b66b169e2cdf762bb739a261f2acebeb1..8835cf8d9d1fb3b4930a50d002e0b426b155f4ac 100644
+index e47f279b66b169e2cdf762bb739a261f2acebeb1..a4a2f36f5561bfc22fa6dd9d5dcb969428a1a77b 100644
 --- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
 +++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+@@ -355,7 +355,7 @@ public class GlobalConfiguration extends ConfigurationPart {
+     public BlockUpdates blockUpdates;
+ 
+     public class BlockUpdates extends ConfigurationPart {
+-        public boolean disableNoteblockUpdates = false;
++        public final boolean disableNoteblockUpdates = false; // Folia - disable noteblock updates always false
+         public boolean disableTripwireUpdates = false;
+         public boolean disableChorusPlantUpdates = false;
+         public boolean disableMushroomBlockUpdates = false;
 @@ -403,4 +403,19 @@ public class GlobalConfiguration extends ConfigurationPart {
      public class UpdateChecker extends ConfigurationPart {
          public boolean enabled = true;
