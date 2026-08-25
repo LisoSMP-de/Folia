@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
-Date: Mon, 24 Aug 2026 22:56:18 +0200
-Subject: [PATCH] Add Folia-native status bars with CPU bar and RAM metrics
+Date: Tue, 25 Aug 2026 08:33:33 +0200
+Subject: [PATCH] Add Folia-native status bars with CPU bar
 
 
 diff --git a/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059b78e5fc2
+index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea82e92a438
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,671 @@
+@@ -0,0 +1,549 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -378,123 +378,6 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +        LINUX_TEMP_AVAILABLE = avail;
 +    }
 +
-+    // --- RAM hardware metrics (Clock & Temperature) ---
-+    private static volatile double cachedRamClockMhz = Double.NaN;
-+    private static volatile long lastRamClockRead = 0L;
-+    private static final long RAM_CLOCK_CACHE_NS = 10_000_000_000L; // cache 10s
-+    private static volatile double cachedRamTemp = Double.NaN;
-+    private static volatile long lastRamTempRead = 0L;
-+    private static final long RAM_TEMP_CACHE_NS = 2_000_000_000L; // cache 2s
-+
-+    private static double readRamClockMhz() {
-+        final long now = System.nanoTime();
-+        if (now - lastRamClockRead < RAM_CLOCK_CACHE_NS && !Double.isNaN(cachedRamClockMhz)) return cachedRamClockMhz;
-+        if (IS_WINDOWS) {
-+            try {
-+                final Process p = new ProcessBuilder(
-+                    "powershell", "-NoProfile", "-Command",
-+                    "& { try { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property ConfiguredClockSpeed -Maximum).Maximum; if (-not $s) { $s = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Speed -Maximum).Maximum }; $s } catch { } }"
-+                ).redirectErrorStream(true).start();
-+                String line;
-+                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-+                    while ((line = r.readLine()) != null) {
-+                        line = line.trim();
-+                        if (!line.isEmpty()) {
-+                            try {
-+                                cachedRamClockMhz = Double.parseDouble(line);
-+                                lastRamClockRead = now;
-+                                return cachedRamClockMhz;
-+                            } catch (final Throwable ignored) {}
-+                        }
-+                    }
-+                }
-+                p.waitFor();
-+            } catch (final Throwable ignored) {}
-+        } else {
-+            try {
-+                final Process p = new ProcessBuilder("sh", "-c", "dmidecode -t memory 2>/dev/null || lshw -class memory 2>/dev/null").redirectErrorStream(true).start();
-+                double maxSpeed = Double.NaN;
-+                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-+                    String line;
-+                    while ((line = r.readLine()) != null) {
-+                        line = line.trim();
-+                        if (line.startsWith("Configured Memory Speed:") || line.startsWith("Speed:") || line.startsWith("clock:")) {
-+                            final String[] parts = line.split(":", 2);
-+                            if (parts.length == 2) {
-+                                final String val = parts[1].replace("MT/s", "").replace("MHz", "").replace("GHz", "000").trim();
-+                                try {
-+                                    final double sp = Double.parseDouble(val);
-+                                    if (Double.isNaN(maxSpeed) || sp > maxSpeed) maxSpeed = sp;
-+                                } catch (final Throwable ignored) {}
-+                            }
-+                        }
-+                    }
-+                }
-+                p.waitFor();
-+                if (!Double.isNaN(maxSpeed)) {
-+                    cachedRamClockMhz = maxSpeed;
-+                    lastRamClockRead = now;
-+                    return cachedRamClockMhz;
-+                }
-+            } catch (final Throwable ignored) {}
-+        }
-+        return Double.NaN;
-+    }
-+
-+    private static double readRamTempC() {
-+        final long now = System.nanoTime();
-+        if (now - lastRamTempRead < RAM_TEMP_CACHE_NS && !Double.isNaN(cachedRamTemp)) return cachedRamTemp;
-+        if (!IS_WINDOWS) {
-+            try {
-+                final Path hwmonDir = Path.of("/sys/class/hwmon");
-+                if (Files.isDirectory(hwmonDir)) {
-+                    try (var stream = Files.newDirectoryStream(hwmonDir, "hwmon*")) {
-+                        for (Path dir : stream) {
-+                            Path nameFile = dir.resolve("name");
-+                            if (Files.isReadable(nameFile)) {
-+                                String name = Files.readString(nameFile).trim().toLowerCase(Locale.ROOT);
-+                                if (name.contains("jc42") || name.contains("dimm") || name.contains("spd5118") || name.contains("dram") || name.contains("ddr")) {
-+                                    for (int t = 1; t <= 8; t++) {
-+                                        Path p = dir.resolve("temp" + t + "_input");
-+                                        if (Files.isReadable(p)) {
-+                                            try {
-+                                                cachedRamTemp = Long.parseLong(Files.readString(p).trim()) / 1000.0D;
-+                                                lastRamTempRead = now;
-+                                                return cachedRamTemp;
-+                                            } catch (Throwable ignored) {}
-+                                        }
-+                                    }
-+                                }
-+                            }
-+                        }
-+                    }
-+                }
-+            } catch (final Throwable ignored) {}
-+        } else {
-+            try {
-+                final Process p = new ProcessBuilder(
-+                    "powershell", "-NoProfile", "-Command",
-+                    "& { Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor -ErrorAction SilentlyContinue | Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -like '*RAM*' -or $_.Name -like '*Memory*') } | Select-Object -ExpandProperty Value -First 1 }"
-+                ).redirectErrorStream(true).start();
-+                String line;
-+                try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-+                    while ((line = r.readLine()) != null) {
-+                        line = line.trim();
-+                        if (!line.isEmpty()) {
-+                            try {
-+                                cachedRamTemp = Double.parseDouble(line);
-+                                lastRamTempRead = now;
-+                                return cachedRamTemp;
-+                            } catch (final Throwable ignored) {}
-+                        }
-+                    }
-+                }
-+                p.waitFor();
-+            } catch (final Throwable ignored) {}
-+        }
-+        return Double.NaN;
-+    }
-+
 +    // --- CPU clock frequency detection ---
 +    private static final Path LINUX_FREQ_MAX_PATH = Path.of("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
 +    private static final Path LINUX_CPUINFO_PATH = Path.of("/proc/cpuinfo");
@@ -661,14 +544,20 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
 +            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
 +            final double clockGhz = readCpuClockGhz();
++            sb.append(" Clock<gray>:</gray> ");
 +            if (!Double.isNaN(clockGhz)) {
 +                final String gC = clockGradient(clockGhz);
-+                sb.append(" Clock<gray>:</gray> ").append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
++                sb.append(gC).append(String.format(Locale.ROOT, "%.2fGHz", clockGhz)).append(GRAD_END);
++            } else {
++                sb.append("<dark_gray>N/A</dark_gray>");
 +            }
 +            final double tempC = readCpuTempC();
++            sb.append(" Temp<gray>:</gray> ");
 +            if (!Double.isNaN(tempC)) {
 +                final String gT = tempGradient(tempC);
-+                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
++                sb.append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
++            } else {
++                sb.append("<dark_gray>N/A</dark_gray>");
 +            }
 +            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
 +            return;
@@ -681,18 +570,7 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +            final String gUsed = memGradient(percent);
 +            final String usedStr = gUsed + String.format(Locale.ROOT, "%.2fGB", used / 1073741824.0D) + GRAD_END;
 +            final String maxStr = GRAD_GREEN + String.format(Locale.ROOT, "%.2fGB", max / 1073741824.0D) + GRAD_END;
-+            final StringBuilder sb = new StringBuilder();
-+            sb.append("<gray>Memory usage<gray>:</gray> ").append(usedStr).append("<yellow>/</yellow>").append(maxStr);
-+            final double ramClockMhz = readRamClockMhz();
-+            if (!Double.isNaN(ramClockMhz)) {
-+                sb.append(" Clock<gray>:</gray> ").append(GRAD_GREEN).append(String.format(Locale.ROOT, "%.0fMHz", ramClockMhz)).append(GRAD_END);
-+            }
-+            final double ramTempC = readRamTempC();
-+            if (!Double.isNaN(ramTempC)) {
-+                final String gT = tempGradient(ramTempC);
-+                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", ramTempC)).append(GRAD_END);
-+            }
-+            final Component msg = mm.deserialize(sb.toString());
++            final Component msg = mm.deserialize("<gray>Memory usage<gray>:</gray> " + usedStr + "<yellow>/</yellow>" + maxStr);
 +            bar.name(msg).progress((float) percent).color(barColorForGrad(gUsed));
 +            return;
 +        }
@@ -740,7 +618,6 @@ index 0000000000000000000000000000000000000000..3e42dbd6aabc7072f4a12a49cb21f059
 +        BarType(final String key) { this.key = new NamespacedKey("folia", key); }
 +    }
 +}
-\ No newline at end of file
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarPlugin.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..c6260c88db139569ceb0103e20602c3c9fb1b62e
