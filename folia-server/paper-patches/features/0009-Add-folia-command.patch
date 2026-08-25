@@ -1,0 +1,650 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Tue, 25 Aug 2026 10:08:32 +0200
+Subject: [PATCH] Add folia command
+
+
+diff --git a/src/main/java/io/papermc/paper/command/FoliaCommand.java b/src/main/java/io/papermc/paper/command/FoliaCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..94dedc95efc772e82a994dd654d05adda45162a6
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/command/FoliaCommand.java
+@@ -0,0 +1,625 @@
++package io.papermc.paper.command;
++
++import net.kyori.adventure.text.Component;
++import net.kyori.adventure.text.minimessage.MiniMessage;
++import net.minecraft.server.dedicated.DedicatedServer;
++import net.minecraft.server.level.ServerLevel;
++import org.bukkit.Bukkit;
++import org.bukkit.World;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.craftbukkit.CraftServer;
++import org.bukkit.craftbukkit.CraftWorld;
++import org.bukkit.entity.Player;
++import org.bukkit.permissions.Permission;
++import org.bukkit.permissions.PermissionDefault;
++import org.bukkit.plugin.PluginManager;
++import org.jetbrains.annotations.NotNull;
++import org.spigotmc.SpigotConfig;
++
++import java.io.File;
++import java.io.IOException;
++import java.lang.reflect.Field;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.Locale;
++import java.util.logging.Level;
++
++public final class FoliaCommand extends Command {
++    private static final String PERMISSION = "folia.command.folia";
++    private static final MiniMessage MM = MiniMessage.miniMessage();
++
++    private static final String PREFIX = "<bold><gradient:#38BDF8:#1D2FC2>FOLIA</gradient></bold> <gray>»</gray> ";
++
++    public FoliaCommand() {
++        super("folia");
++        this.description = "Configure Folia server settings";
++        this.usageMessage = "/folia <viewdistance|simulationdistance|maxslots|motd|allowflight|whitelist|spawnprotection|idletimeout|entitytracking|pausewhenempty|allowend|allow-end|hopperspeed|hopperamount|hoppercheck|get|reload> [value]";
++        this.setPermission(PERMISSION);
++        final PluginManager pm = Bukkit.getServer().getPluginManager();
++        if (pm.getPermission(PERMISSION) == null) {
++            pm.addPermission(new Permission(PERMISSION, "Allows using the /folia command", PermissionDefault.OP));
++        }
++    }
++
++    @Override
++    public boolean execute(@NotNull CommandSender sender, @NotNull String commandLabel, @NotNull String[] args) {
++        if (!this.testPermission(sender)) {
++            return true;
++        }
++
++        if (args.length == 0) {
++            this.sendHelp(sender);
++            return true;
++        }
++
++        final DedicatedServer dedicatedServer = ((CraftServer) Bukkit.getServer()).getServer();
++        final String sub = args[0].toLowerCase(Locale.ROOT);
++
++        switch (sub) {
++            case "viewdistance", "view-distance", "vd" -> this.handleViewDistance(sender, dedicatedServer, args);
++            case "simulationdistance", "simulation-distance", "simdistance", "sd" -> this.handleSimulationDistance(sender, dedicatedServer, args);
++            case "maxslots", "maxplayers", "max-slots", "max-players", "slots" -> this.handleMaxSlots(sender, dedicatedServer, args);
++            case "motd" -> this.handleMotd(sender, dedicatedServer, args);
++            case "allowflight", "flight", "fly" -> this.handleAllowFlight(sender, dedicatedServer, args);
++            case "whitelist", "wl" -> this.handleWhitelist(sender, dedicatedServer, args);
++            case "spawnprotection", "spawn-protection" -> this.handleSpawnProtection(sender, dedicatedServer, args);
++            case "idletimeout", "idle-timeout", "afktimeout" -> this.handleIdleTimeout(sender, dedicatedServer, args);
++            case "entitytracking", "entity-broadcast-range", "trackingrange" -> this.handleEntityTracking(sender, dedicatedServer, args);
++            case "pausewhenempty", "pause-when-empty", "pause" -> this.handlePauseWhenEmpty(sender, dedicatedServer, args);
++            case "allowend", "allow-end", "end" -> this.handleAllowEnd(sender, args);
++            case "hopper" -> this.handleHopper(sender, args);
++            case "hopperspeed", "hopper-transfer", "hoppertransfer", "hopperdelay" -> this.handleHopperSpeed(sender, args.length >= 2 ? args[1] : null);
++            case "hopperamount", "hopper-amount" -> this.handleHopperAmount(sender, args.length >= 2 ? args[1] : null);
++            case "hoppercheck", "hopper-check" -> this.handleHopperCheck(sender, args.length >= 2 ? args[1] : null);
++            case "get", "info", "status" -> this.handleGet(sender, dedicatedServer);
++            case "reload" -> this.handleReload(sender, dedicatedServer);
++            default -> {
++                sender.sendMessage(MM.deserialize(PREFIX + "<red>Unbekannter Unterbefehl: <yellow>" + args[0] + "</yellow></red>"));
++                this.sendHelp(sender);
++            }
++        }
++        return true;
++    }
++
++    private void handleViewDistance(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.viewDistance();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuelle View Distance: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 2 || val > 32) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>View Distance muss zwischen <yellow>2</yellow> und <yellow>32</yellow> liegen.</red>"));
++            return;
++        }
++
++        final int oldVal = server.viewDistance();
++        server.setViewDistance(val);
++        for (final World world : Bukkit.getWorlds()) {
++            world.setViewDistance(val);
++        }
++
++        broadcastChange(sender, "View Distance", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleSimulationDistance(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.simulationDistance();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuelle Simulation Distance: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 2 || val > 32) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Simulation Distance muss zwischen <yellow>2</yellow> und <yellow>32</yellow> liegen.</red>"));
++            return;
++        }
++
++        final int oldVal = server.simulationDistance();
++        server.setSimulationDistance(val);
++        for (final World world : Bukkit.getWorlds()) {
++            world.setSimulationDistance(val);
++        }
++
++        broadcastChange(sender, "Simulation Distance", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleMaxSlots(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.getMaxPlayers();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuelle Max Slots: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 0) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Max Slots muss >= 0 sein.</red>"));
++            return;
++        }
++
++        final int oldVal = server.getMaxPlayers();
++        server.setMaxPlayers(val);
++
++        broadcastChange(sender, "Max Slots", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleMotd(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final String current = server.getMotd();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuelle MOTD: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final String newMotd = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
++        final String oldMotd = server.getMotd();
++        server.setMotd(newMotd);
++
++        broadcastChange(sender, "MOTD", oldMotd, newMotd, false);
++    }
++
++    private void handleAllowFlight(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final boolean current = server.allowFlight();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuell Allow Flight: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final boolean val = Boolean.parseBoolean(args[1]) || args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("yes") || args[1].equalsIgnoreCase("1");
++        final boolean oldVal = server.allowFlight();
++        server.setAllowFlight(val);
++
++        broadcastChange(sender, "Allow Flight", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleWhitelist(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final boolean current = server.isUsingWhitelist();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuell Whitelist: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final boolean val = Boolean.parseBoolean(args[1]) || args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("yes") || args[1].equalsIgnoreCase("1");
++        final boolean oldVal = server.isUsingWhitelist();
++        server.setUsingWhitelist(val);
++
++        broadcastChange(sender, "Whitelist", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleSpawnProtection(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.spawnProtectionRadius();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktueller Spawn Protection Radius: <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 0) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Spawn Protection Radius muss >= 0 sein.</red>"));
++            return;
++        }
++
++        final int oldVal = server.spawnProtectionRadius();
++        server.setSpawnProtectionRadius(val);
++
++        broadcastChange(sender, "Spawn Protection", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleIdleTimeout(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.playerIdleTimeout();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktueller Player Idle Timeout: <yellow>" + current + " min</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 0) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Player Idle Timeout muss >= 0 sein (0 = deaktiviert).</red>"));
++            return;
++        }
++
++        final int oldVal = server.playerIdleTimeout();
++        server.setPlayerIdleTimeout(val);
++
++        broadcastChange(sender, "Idle Timeout", oldVal + " min", val + " min", false);
++    }
++
++    private void handleEntityTracking(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.entityBroadcastRangePercentage();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuelle Entity Tracking Range: <yellow>" + current + "%</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 10 || val > 1000) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Tracking Range Prozent muss zwischen <yellow>10%</yellow> und <yellow>1000%</yellow> liegen.</red>"));
++            return;
++        }
++
++        final int oldVal = server.entityBroadcastRangePercentage();
++        server.setEntityBroadcastRangePercentage(val);
++
++        broadcastChange(sender, "Entity Tracking Range", oldVal + "%", val + "%", false);
++    }
++
++    private void handlePauseWhenEmpty(final CommandSender sender, final DedicatedServer server, final String[] args) {
++        if (args.length < 2) {
++            final int current = server.pauseWhenEmptySeconds();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuell Pause When Empty: <yellow>" + current + "s</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(args[1]);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + args[1] + "</yellow></red>"));
++            return;
++        }
++
++        final int oldVal = server.pauseWhenEmptySeconds();
++        server.setPauseWhenEmptySeconds(val);
++
++        broadcastChange(sender, "Pause When Empty", oldVal + "s", val + "s", false);
++    }
++
++    private void handleAllowEnd(final CommandSender sender, final String[] args) {
++        final CraftServer craftServer = (CraftServer) Bukkit.getServer();
++        if (args.length < 2) {
++            final boolean current = craftServer.getAllowEnd();
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktuell Allow End (bukkit.yml): <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final boolean val = Boolean.parseBoolean(args[1]) || args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("yes") || args[1].equalsIgnoreCase("1");
++        final boolean oldVal = craftServer.getAllowEnd();
++
++        craftServer.spigot().getBukkitConfig().set("settings.allow-end", val);
++        saveBukkitConfig(craftServer);
++
++        broadcastChange(sender, "Allow End (bukkit.yml)", String.valueOf(oldVal), String.valueOf(val), true);
++    }
++
++        private void handleHopper(final CommandSender sender, final String[] args) {
++        if (args.length < 2) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<gradient:#38BDF8:#1D2FC2><b>Hopper Einstellungen:</b></gradient>"));
++            sender.sendMessage(MM.deserialize("  <aqua>/folia hopper speed &lt;ticks&gt;</aqua> <dark_gray>-</dark_gray> <gray>Transfer-Delay in Ticks (Standard: 8)</gray>"));
++            sender.sendMessage(MM.deserialize("  <aqua>/folia hopper amount &lt;1-64&gt;</aqua> <dark_gray>-</dark_gray> <gray>Items pro Transfer (Standard: 1)</gray>"));
++            sender.sendMessage(MM.deserialize("  <aqua>/folia hopper check &lt;ticks&gt;</aqua> <dark_gray>-</dark_gray> <gray>Check-Delay in Ticks (Standard: 1)</gray>"));
++            return;
++        }
++
++        final String sub = args[1].toLowerCase(Locale.ROOT);
++        final String valArg = args.length >= 3 ? args[2] : null;
++
++        switch (sub) {
++            case "speed", "transfer", "transfer-delay", "delay" -> this.handleHopperSpeed(sender, valArg);
++            case "amount", "item-amount", "items" -> this.handleHopperAmount(sender, valArg);
++            case "check", "check-delay" -> this.handleHopperCheck(sender, valArg);
++            default -> sender.sendMessage(MM.deserialize(PREFIX + "<red>Unbekannte Hopper-Einstellung: <yellow>" + args[1] + "</yellow>. Nutze: <yellow>speed, amount, check</yellow></red>"));
++        }
++    }
++
++    private void handleHopperSpeed(final CommandSender sender, final String valArg) {
++        if (valArg == null) {
++            final int current = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-transfer", 8);
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktueller Hopper Transfer Delay (spigot.yml): <yellow>" + current + " ticks</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(valArg);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + valArg + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 1) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Hopper Transfer muss >= 1 Tick sein.</red>"));
++            return;
++        }
++
++        final int oldVal = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-transfer", 8);
++        SpigotConfig.config.set("world-settings.default.ticks-per.hopper-transfer", val);
++
++        for (final World world : Bukkit.getWorlds()) {
++            final ServerLevel nms = ((CraftWorld) world).getHandle();
++            nms.spigotConfig.hopperTransfer = val;
++            SpigotConfig.config.set("world-settings." + world.getName() + ".ticks-per.hopper-transfer", val);
++        }
++        saveSpigotConfig();
++
++        broadcastChange(sender, "Hopper Transfer Speed (spigot.yml)", oldVal + " ticks", val + " ticks", false);
++    }
++
++    private void handleHopperAmount(final CommandSender sender, final String valArg) {
++        if (valArg == null) {
++            final int current = SpigotConfig.config.getInt("world-settings.default.hopper-amount", 1);
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktueller Hopper Amount (spigot.yml): <yellow>" + current + "</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(valArg);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + valArg + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 1 || val > 64) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Hopper Amount muss zwischen <yellow>1</yellow> und <yellow>64</yellow> liegen.</red>"));
++            return;
++        }
++
++        final int oldVal = SpigotConfig.config.getInt("world-settings.default.hopper-amount", 1);
++        SpigotConfig.config.set("world-settings.default.hopper-amount", val);
++
++        for (final World world : Bukkit.getWorlds()) {
++            final ServerLevel nms = ((CraftWorld) world).getHandle();
++            nms.spigotConfig.hopperAmount = val;
++            SpigotConfig.config.set("world-settings." + world.getName() + ".hopper-amount", val);
++        }
++        saveSpigotConfig();
++
++        broadcastChange(sender, "Hopper Item Amount (spigot.yml)", String.valueOf(oldVal), String.valueOf(val), false);
++    }
++
++    private void handleHopperCheck(final CommandSender sender, final String valArg) {
++        if (valArg == null) {
++            final int current = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-check", 1);
++            sender.sendMessage(MM.deserialize(PREFIX + "<gray>Aktueller Hopper Check Delay (spigot.yml): <yellow>" + current + " ticks</yellow></gray>"));
++            return;
++        }
++
++        final int val;
++        try {
++            val = Integer.parseInt(valArg);
++        } catch (final NumberFormatException e) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Ungültige Zahl: <yellow>" + valArg + "</yellow></red>"));
++            return;
++        }
++
++        if (val < 1) {
++            sender.sendMessage(MM.deserialize(PREFIX + "<red>Hopper Check Delay muss >= 1 Tick sein.</red>"));
++            return;
++        }
++
++        final int oldVal = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-check", 1);
++        SpigotConfig.config.set("world-settings.default.ticks-per.hopper-check", val);
++
++        for (final World world : Bukkit.getWorlds()) {
++            final ServerLevel nms = ((CraftWorld) world).getHandle();
++            nms.spigotConfig.hopperCheck = val;
++            SpigotConfig.config.set("world-settings." + world.getName() + ".ticks-per.hopper-check", val);
++        }
++        saveSpigotConfig();
++
++        broadcastChange(sender, "Hopper Check Delay (spigot.yml)", oldVal + " ticks", val + " ticks", false);
++    }
++
++    private static void saveBukkitConfig(final CraftServer craftServer) {
++        try {
++            final File configFile = (File) craftServer.getServer().options.valueOf("bukkit-settings");
++            craftServer.spigot().getBukkitConfig().save(configFile);
++        } catch (final IOException e) {
++            Bukkit.getLogger().log(Level.SEVERE, "[Folia] Konnte bukkit.yml nicht speichern", e);
++        }
++    }
++
++    private static void saveSpigotConfig() {
++        try {
++            final Field configFileField = SpigotConfig.class.getDeclaredField("CONFIG_FILE");
++            configFileField.setAccessible(true);
++            final File configFile = (File) configFileField.get(null);
++            if (configFile != null) {
++                SpigotConfig.config.save(configFile);
++            }
++        } catch (final Exception e) {
++            Bukkit.getLogger().log(Level.SEVERE, "[Folia] Konnte spigot.yml nicht speichern", e);
++        }
++    }
++
++    private void handleGet(final CommandSender sender, final DedicatedServer server) {
++        final CraftServer craftServer = (CraftServer) Bukkit.getServer();
++        final int hopperTransfer = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-transfer", 8);
++        final int hopperAmount = SpigotConfig.config.getInt("world-settings.default.hopper-amount", 1);
++        final int hopperCheck = SpigotConfig.config.getInt("world-settings.default.ticks-per.hopper-check", 1);
++
++        sender.sendMessage(MM.deserialize(PREFIX + "<gradient:#38BDF8:#1D2FC2><b>Aktuelle Server Konfigurationen:</b></gradient>"));
++        sender.sendMessage(MM.deserialize("  <gray>View Distance (server.properties):</gray> <yellow>" + server.viewDistance() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Simulation Distance (server.properties):</gray> <yellow>" + server.simulationDistance() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Max Slots (server.properties):</gray> <yellow>" + server.getMaxPlayers() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>MOTD (server.properties):</gray> <yellow>" + server.getMotd() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Allow Flight (server.properties):</gray> <yellow>" + server.allowFlight() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Whitelist (server.properties):</gray> <yellow>" + server.isUsingWhitelist() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Spawn Protection (server.properties):</gray> <yellow>" + server.spawnProtectionRadius() + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Player Idle Timeout (server.properties):</gray> <yellow>" + server.playerIdleTimeout() + " min</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Entity Tracking Range (server.properties):</gray> <yellow>" + server.entityBroadcastRangePercentage() + "%</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Pause When Empty (server.properties):</gray> <yellow>" + server.pauseWhenEmptySeconds() + "s</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Allow End (bukkit.yml):</gray> <yellow>" + craftServer.getAllowEnd() + "</yellow> <red>(Neustart erforderlich)</red>"));
++        sender.sendMessage(MM.deserialize("  <gray>Hopper Transfer (spigot.yml):</gray> <yellow>" + hopperTransfer + " ticks</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Hopper Amount (spigot.yml):</gray> <yellow>" + hopperAmount + "</yellow>"));
++        sender.sendMessage(MM.deserialize("  <gray>Hopper Check (spigot.yml):</gray> <yellow>" + hopperCheck + " ticks</yellow>"));
++    }
++
++    private void handleReload(final CommandSender sender, final DedicatedServer server) {
++        io.papermc.paper.threadedregions.RegionizedServer.getInstance().addTask(() -> {
++            server.paperConfigurations.reloadConfigs(server);
++            server.server.reloadCount++;
++            broadcastChange(sender, "Konfigurationen", "alt", "neu geladen", false);
++        });
++    }
++
++    private static void broadcastChange(final CommandSender sender, final String setting, final String oldVal, final String newVal, final boolean requiresRestart) {
++        final String senderName = sender.getName();
++        final Component msg = MM.deserialize(
++            PREFIX + "<yellow>" + senderName + "</yellow> <gray>hat</gray> <aqua>" + setting + "</aqua> <gray>von</gray> <red>" + oldVal + "</red> <gray>auf</gray> <green>" + newVal + "</green> <gray>geändert." + (requiresRestart ? " <red><bold>(Neustart erforderlich!)</bold></red>" : "") + "</gray>"
++        );
++
++        sender.sendMessage(msg);
++
++        for (final Player p : Bukkit.getOnlinePlayers()) {
++            if (p.equals(sender)) continue;
++            if (p.isOp() || p.hasPermission(PERMISSION)) {
++                p.sendMessage(msg);
++            }
++        }
++
++        if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)) {
++            Bukkit.getConsoleSender().sendMessage(msg);
++        }
++    }
++
++    private void sendHelp(final CommandSender sender) {
++        sender.sendMessage(MM.deserialize(PREFIX + "<gradient:#38BDF8:#1D2FC2><b>Server Einstellungen:</b></gradient>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia get</aqua> <dark_gray>-</dark_gray> <gray>Alle aktuellen Einstellungen anzeigen</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia viewdistance &lt;2-32&gt;</aqua> <dark_gray>-</dark_gray> <gray>Sichtweite ändern & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia simulationdistance &lt;2-32&gt;</aqua> <dark_gray>-</dark_gray> <gray>Simulationsdistanz ändern & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia maxslots &lt;slots&gt;</aqua> <dark_gray>-</dark_gray> <gray>Maximale Spieleranzahl & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia allowend &lt;true|false&gt;</aqua> <dark_gray>-</dark_gray> <gray>End-Dimension aktivieren/deaktivieren & in bukkit.yml speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia hopperspeed &lt;ticks&gt;</aqua> <dark_gray>-</dark_gray> <gray>Hopper Transfer-Delay & in spigot.yml speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia hopperamount &lt;1-64&gt;</aqua> <dark_gray>-</dark_gray> <gray>Hopper Item-Menge pro Transfer & in spigot.yml speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia hoppercheck &lt;ticks&gt;</aqua> <dark_gray>-</dark_gray> <gray>Hopper Check-Delay & in spigot.yml speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia motd &lt;text&gt;</aqua> <dark_gray>-</dark_gray> <gray>Server-MOTD & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia allowflight &lt;true|false&gt;</aqua> <dark_gray>-</dark_gray> <gray>Fliegen erlauben & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia whitelist &lt;true|false&gt;</aqua> <dark_gray>-</dark_gray> <gray>Whitelist aktivieren & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia spawnprotection &lt;radius&gt;</aqua> <dark_gray>-</dark_gray> <gray>Spawnschutz-Radius & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia idletimeout &lt;minuten&gt;</aqua> <dark_gray>-</dark_gray> <gray>AFK Kick-Timeout & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia entitytracking &lt;10-1000&gt;</aqua> <dark_gray>-</dark_gray> <gray>Entity Tracking Range % & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia pausewhenempty &lt;sekunden&gt;</aqua> <dark_gray>-</dark_gray> <gray>Server-Pause bei 0 Spielern & in server.properties speichern</gray>"));
++        sender.sendMessage(MM.deserialize("  <aqua>/folia reload</aqua> <dark_gray>-</dark_gray> <gray>Konfigurationen neu laden</gray>"));
++    }
++
++        @Override
++    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
++        if (!sender.hasPermission(PERMISSION)) {
++            return Collections.emptyList();
++        }
++
++        final String last = args[args.length - 1].toLowerCase(Locale.ROOT);
++
++        if (args.length == 1) {
++            final List<String> subs = List.of(
++                "get", "hopper", "viewdistance", "simulationdistance", "maxslots", "allowend",
++                "motd", "allowflight", "whitelist", "spawnprotection",
++                "idletimeout", "entitytracking", "pausewhenempty", "reload"
++            );
++            return filterStartsWith(subs, last);
++        }
++
++        if (args.length == 2) {
++            final String sub = args[0].toLowerCase(Locale.ROOT);
++            if (sub.equals("hopper")) {
++                return filterStartsWith(List.of("speed", "amount", "check"), last);
++            }
++            if (sub.equals("viewdistance") || sub.equals("view-distance") || sub.equals("vd")) {
++                return filterStartsWith(List.of("2", "4", "6", "8", "10", "12", "16", "32"), last);
++            }
++            if (sub.equals("simulationdistance") || sub.equals("simulation-distance") || sub.equals("simdistance") || sub.equals("sd")) {
++                return filterStartsWith(List.of("2", "4", "6", "8", "10", "12"), last);
++            }
++            if (sub.equals("maxslots") || sub.equals("maxplayers") || sub.equals("slots")) {
++                return filterStartsWith(List.of("20", "50", "100", "200"), last);
++            }
++            if (sub.equals("allowend") || sub.equals("allow-end") || sub.equals("end") || sub.equals("allowflight") || sub.equals("flight") || sub.equals("fly") || sub.equals("whitelist") || sub.equals("wl")) {
++                return filterStartsWith(List.of("true", "false"), last);
++            }
++            if (sub.equals("spawnprotection") || sub.equals("spawn-protection")) {
++                return filterStartsWith(List.of("0", "16", "32"), last);
++            }
++            if (sub.equals("idletimeout") || sub.equals("idle-timeout") || sub.equals("afktimeout")) {
++                return filterStartsWith(List.of("0", "5", "10", "15", "30"), last);
++            }
++            if (sub.equals("entitytracking") || sub.equals("entity-broadcast-range") || sub.equals("trackingrange")) {
++                return filterStartsWith(List.of("50", "100", "150", "200"), last);
++            }
++            if (sub.equals("pausewhenempty") || sub.equals("pause-when-empty") || sub.equals("pause")) {
++                return filterStartsWith(List.of("-1", "60", "300"), last);
++            }
++            if (sub.equals("hopperspeed") || sub.equals("hopper-transfer") || sub.equals("hoppertransfer") || sub.equals("hopperdelay")) {
++                return filterStartsWith(List.of("1", "2", "4", "8"), last);
++            }
++            if (sub.equals("hopperamount") || sub.equals("hopper-amount")) {
++                return filterStartsWith(List.of("1", "2", "4", "8", "16", "64"), last);
++            }
++            if (sub.equals("hoppercheck") || sub.equals("hopper-check")) {
++                return filterStartsWith(List.of("1", "2", "4", "8"), last);
++            }
++        }
++
++        if (args.length == 3) {
++            final String sub = args[0].toLowerCase(Locale.ROOT);
++            if (sub.equals("hopper")) {
++                final String hopperSub = args[1].toLowerCase(Locale.ROOT);
++                if (hopperSub.equals("speed") || hopperSub.equals("transfer") || hopperSub.equals("transfer-delay") || hopperSub.equals("delay")) {
++                    return filterStartsWith(List.of("1", "2", "4", "8"), last);
++                }
++                if (hopperSub.equals("amount") || hopperSub.equals("item-amount") || hopperSub.equals("items")) {
++                    return filterStartsWith(List.of("1", "2", "4", "8", "16", "64"), last);
++                }
++                if (hopperSub.equals("check") || hopperSub.equals("check-delay")) {
++                    return filterStartsWith(List.of("1", "2", "4", "8"), last);
++                }
++            }
++        }
++
++        return Collections.emptyList();
++    }
++
++    private static List<String> filterStartsWith(final List<String> list, final String prefix) {
++        final List<String> result = new ArrayList<>();
++        for (final String s : list) {
++            if (s.toLowerCase(Locale.ROOT).startsWith(prefix)) {
++                result.add(s);
++            }
++        }
++        return result;
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 3e0b64ab8c6a901b9a04292e4432232538289742..9af7371beefeb5c75de75442da09b54e5575d07e 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -422,6 +422,7 @@ public final class CraftServer implements Server {
+         this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.regionBarCommand()); // Folia - status bars
+         this.commandMap.register("folia", io.papermc.paper.threadedregions.FoliaStatusBarCommand.cpuBarCommand()); // Folia - status bars
+         io.papermc.paper.threadedregions.FoliaStatusBarCommand.start(); // Folia - status bars
++        this.commandMap.register("folia", new io.papermc.paper.command.FoliaCommand()); // Folia - folia command
+          // Paper end
+ 
+         CraftRegistry.setMinecraftRegistry(console.registryAccess());
