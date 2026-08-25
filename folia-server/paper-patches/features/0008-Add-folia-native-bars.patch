@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
 Date: Tue, 25 Aug 2026 08:33:33 +0200
-Subject: [PATCH] Add Folia-native status bars with CPU bar
+Subject: [PATCH] Add folia native bars
 
 
 diff --git a/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java b/src/main/java/io/papermc/paper/threadedregions/ChunkHot.java
