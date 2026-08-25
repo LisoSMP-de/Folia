@@ -89,3 +89,15 @@ index 74ffdc823e66fc5ec027c4b7c462382bcbfe2be2..10a0be7a4db1a51579d113d279af7a9e
              SharedConstants.getCurrentVersion().id(),
              SharedConstants.getCurrentVersion().name(),
              getManifestAttribute(manifest, ATTRIBUTE_BUILD_NUMBER)
+diff --git a/src/main/java/org/bukkit/craftbukkit/Main.java b/src/main/java/org/bukkit/craftbukkit/Main.java
+index 9d4d97fcb0f3cc94e9a263c61cc0e7e58fd322c3..326de74b9bc5b26c3d47182082068da834a24c94 100644
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -19,6 +19,7 @@ public class Main {
+     // Paper start - Reset loggers after shutdown
+     static {
+         System.setProperty("java.util.logging.manager", "io.papermc.paper.log.CustomLogManager");
++        System.setProperty("aether.syncContext.named.nameMapper", "gav"); // Folia - silence DiscriminatingNameMapper hostname warning
+     }
+     // Paper end - Reset loggers after shutdown
+ 
