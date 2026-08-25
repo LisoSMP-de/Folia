@@ -1,4 +1,4 @@
-name: Patch and Build
+name: createMojmapPaperclipJar
 
 on:
   push:
