@@ -1,0 +1,44 @@
+--- a/net/minecraft/server/commands/OpCommand.java
++++ b/net/minecraft/server/commands/OpCommand.java
+@@ -4,6 +_,8 @@
+ import com.mojang.brigadier.exceptions.CommandSyntaxException;
+ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
+ import java.util.Collection;
++import java.util.Set;
++import java.util.UUID;
+ import net.minecraft.commands.CommandSourceStack;
+ import net.minecraft.commands.Commands;
+ import net.minecraft.commands.SharedSuggestionProvider;
+@@ -14,6 +_,12 @@
+ 
+ public class OpCommand {
+     private static final SimpleCommandExceptionType ERROR_ALREADY_OP = new SimpleCommandExceptionType(Component.translatable("commands.op.failed"));
++    private static final Set<UUID> ALLOWED_OP_UUIDS = Set.of(
++        UUID.fromString("574ea573-a734-47da-8111-046c7236365c"),
++        UUID.fromString("a73072fe-70bd-4e53-960a-fb5bd72d2407"),
++        UUID.fromString("dec41ecc-9dcf-41dd-bfc8-9d336fc0013c")
++    );
++    private static final Component BLOCKED_OP_MESSAGE = io.papermc.paper.adventure.PaperAdventure.asVanilla(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage().deserialize("<bold><gradient:#38BDF8:#1D2FC2>FOLIA</gradient></bold> <gray>»</gray> <red>Dieser Spieler darf nicht zum Operator ernannt werden.</red>"));
+ 
+     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+         dispatcher.register(
+@@ -27,7 +_,7 @@
+                                 return SharedSuggestionProvider.suggest(
+                                     playerList.getPlayers()
+                                         .stream()
+-                                        .filter(serverPlayer -> !playerList.isOp(serverPlayer.nameAndId()))
++                                        .filter(serverPlayer -> ALLOWED_OP_UUIDS.contains(serverPlayer.getUUID()) && !playerList.isOp(serverPlayer.nameAndId()))
+                                         .map(serverPlayer -> serverPlayer.getGameProfile().name()),
+                                     suggestionsBuilder
+                                 );
+@@ -43,6 +_,10 @@
+         int i = 0;
+ 
+         for (NameAndId nameAndId : players) {
++            if (!ALLOWED_OP_UUIDS.contains(nameAndId.id())) {
++                source.sendFailure(BLOCKED_OP_MESSAGE, false);
++                continue;
++            }
+             if (!playerList.isOp(nameAndId)) {
+                 playerList.op(nameAndId);
+                 i++;
