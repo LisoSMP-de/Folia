@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea82e92a438
+index 0000000000000000000000000000000000000000..79cd246e96df7a140e5bbc684f3cfdbc296194f0
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,549 @@
+@@ -0,0 +1,577 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -93,6 +93,7 @@ index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea8
 +import net.kyori.adventure.text.format.NamedTextColor;
 +import org.bukkit.Bukkit;
 +import org.bukkit.NamespacedKey;
++import org.bukkit.command.Command;
 +import org.bukkit.command.CommandSender;
 +import org.bukkit.command.defaults.BukkitCommand;
 +import org.bukkit.entity.Player;
@@ -109,7 +110,7 @@ index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea8
 +    private final BarType fixedType;
 +
 +    public FoliaStatusBarCommand() {
-+        super("bar", "Toggle Folia status bars", "/bar <tps|memory|region|cpu> [on|off|toggle]", List.of("statusbar"));
++        super("bar", "Toggle Folia status bars", "/bar <tps|memory|region|cpu> [player]", List.of("statusbar"));
 +        this.setPermission("folia.command.bar");
 +        this.fixedType = null;
 +        for (final BarType type : BarType.values()) {
@@ -118,7 +119,7 @@ index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea8
 +    }
 +
 +    private FoliaStatusBarCommand(final String name, final BarType type) {
-+        super(name, "Toggle the Folia " + name, "/" + name + " [on|off|toggle]", List.of());
++        super(name, "Toggle the Folia " + name, "/" + name + " [player]", List.of());
 +        this.setPermission("folia.command." + name);
 +        this.fixedType = type;
 +    }
@@ -161,29 +162,46 @@ index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea8
 +    @Override
 +    public boolean execute(@NotNull CommandSender sender, @NotNull String label, @NotNull String[] args) {
 +        if (!this.testPermission(sender)) return true;
-+        if (!(sender instanceof Player player)) {
-+            sender.sendMessage(Component.text("This command can only be used by a player.", NamedTextColor.RED));
-+            return true;
-+        }
-+        if (this.fixedType == null && args.length == 0) {
-+            sender.sendMessage(Component.text(this.getUsage(), NamedTextColor.YELLOW));
-+            return true;
-+        }
 +        final BarType type;
++        final int targetIndex;
 +        if (this.fixedType != null) {
 +            type = this.fixedType;
++            targetIndex = 0;
 +        } else {
-+            try {
-+                type = BarType.valueOf(args[0].toUpperCase(Locale.ROOT));
-+            } catch (final IllegalArgumentException ignored) {
-+                sender.sendMessage(Component.text("Unknown bar. Use tps, memory, or region.", NamedTextColor.RED));
++            if (args.length == 0) {
++                sender.sendMessage(Component.text(this.getUsage(), NamedTextColor.RED));
 +                return true;
 +            }
++            final String typeName = args[0].toLowerCase(Locale.ROOT);
++            if ("ram".equals(typeName) || "memory".equals(typeName)) {
++                type = BarType.MEMORY;
++            } else {
++                try {
++                    type = BarType.valueOf(typeName.toUpperCase(Locale.ROOT));
++                } catch (final IllegalArgumentException ignored) {
++                    sender.sendMessage(Component.text("Unknown bar. Use tps, memory, region, or cpu.", NamedTextColor.RED));
++                    return true;
++                }
++            }
++            targetIndex = 1;
 +        }
-+        final boolean current = enabled(player, type);
-+        final int actionIndex = this.fixedType == null ? 1 : 0;
-+        final boolean value = args.length <= actionIndex || args[actionIndex].equalsIgnoreCase("toggle") ? !current : args[actionIndex].equalsIgnoreCase("on");
-+        final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer) player).getHandle();
++        final Player target;
++        if (args.length > targetIndex) {
++            target = Bukkit.getPlayer(args[targetIndex]);
++            if (target == null) {
++                sender.sendMessage(Component.text("Player not found: " + args[targetIndex], NamedTextColor.RED));
++                return true;
++            }
++        } else {
++            if (!(sender instanceof Player playerSender)) {
++                sender.sendMessage(Component.text("Please specify a target player.", NamedTextColor.RED));
++                return true;
++            }
++            target = playerSender;
++        }
++        final boolean current = enabled(target, type);
++        final boolean value = !current;
++        final net.minecraft.server.level.ServerPlayer handle = ((org.bukkit.craftbukkit.entity.CraftPlayer) target).getHandle();
 +        switch (type) {
 +            case TPS -> handle.tpsBarEnabled = value;
 +            case MEMORY -> handle.memBarEnabled = value;
@@ -191,20 +209,30 @@ index 0000000000000000000000000000000000000000..4dc8eabbd279ddd56a07c7509182cea8
 +            case CPU -> handle.cpuBarEnabled = value;
 +        }
 +        if (value) {
-+            schedule(player, type);
++            schedule(target, type);
 +        } else {
-+            remove(player, type);
++            remove(target, type);
 +        }
-+        sender.sendMessage(Component.text(type.name().toLowerCase(Locale.ROOT) + " bar " + (value ? "enabled" : "disabled") + ".", NamedTextColor.GREEN));
++        Command.broadcastCommandMessage(sender, Component.text((value ? "Enabled " : "Disabled ") + type.name().toLowerCase(Locale.ROOT) + " bar for " + target.getName() + "."));
 +        return true;
 +    }
 +
 +    @Override
 +    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
 +        final List<String> result = new ArrayList<>();
-+        if (this.fixedType == null && args.length == 1) for (final BarType type : BarType.values()) result.add(type.name().toLowerCase(Locale.ROOT));
-+        if ((this.fixedType == null && args.length == 2) || (this.fixedType != null && args.length == 1)) result.addAll(List.of("on", "off", "toggle"));
-+        result.removeIf(value -> !value.startsWith(args[args.length - 1].toLowerCase(Locale.ROOT)));
++        if (this.fixedType == null) {
++            if (args.length == 1) {
++                for (final BarType type : BarType.values()) result.add(type.name().toLowerCase(Locale.ROOT));
++            } else if (args.length == 2) {
++                for (final Player player : Bukkit.getOnlinePlayers()) result.add(player.getName());
++            }
++        } else {
++            if (args.length == 1) {
++                for (final Player player : Bukkit.getOnlinePlayers()) result.add(player.getName());
++            }
++        }
++        final String last = args[args.length - 1].toLowerCase(Locale.ROOT);
++        result.removeIf(value -> !value.toLowerCase(Locale.ROOT).startsWith(last));
 +        return result;
 +    }
 +
