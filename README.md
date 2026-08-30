@@ -222,6 +222,32 @@ even though there is no main thread anymore.
  ```
 
 
+## PlaceholderAPI Placeholders
+
+Folia integrates natively with PlaceholderAPI when PlaceholderAPI is present on the server (`%folia_<placeholder>%`).
+
+| Placeholder | Description | Example Output |
+|---|---|---|
+| `%folia_cpu_percent%` / `%folia_cpubar_percent%` | CPU utilization percentage with MiniMessage gradient formatting | `<gradient:#55ff55:#00aa00>15%</gradient>` |
+| `%folia_cpu_percent_raw%` / `%folia_cpu_percent_plain%` | CPU utilization percentage plain text | `15%` |
+| `%folia_cpu_percent_num%` | CPU utilization percentage decimal number | `15.23` |
+| `%folia_cpu%` / `%folia_cpu_process%` | Process CPU load (cores × 100%) with MiniMessage gradient | `<gradient:#55ff55:#00aa00>45.30</gradient>` |
+| `%folia_cpu_raw%` / `%folia_cpu_process_raw%` | Process CPU load plain text | `45.30` |
+| `%folia_cpu_clock%` | CPU clock speed with gradient | `<gradient:#55ff55:#00aa00>3.80GHz</gradient>` |
+| `%folia_cpu_clock_raw%` | CPU clock speed plain text | `3.80GHz` |
+| `%folia_cpu_temp%` | CPU temperature with gradient | `<gradient:#55ff55:#00aa00>48.5°C</gradient>` |
+| `%folia_cpu_temp_raw%` | CPU temperature plain text | `48.5°C` |
+| `%folia_region_tps%` / `%folia_tps_region%` / `%folia_region_tps_5s%` | Region TPS (5s average) of the player with MiniMessage gradient | `<gradient:#55ff55:#00aa00>20.00</gradient>` |
+| `%folia_region_tps_15s%` / `%folia_tps_15s%` | Region TPS (15s average) of the player with gradient | `<gradient:#55ff55:#00aa00>20.00</gradient>` |
+| `%folia_region_tps_1m%` / `%folia_tps_1m%` | Region TPS (1m average) of the player with gradient | `<gradient:#55ff55:#00aa00>20.00</gradient>` |
+| `%folia_region_tps_5m%` / `%folia_tps_5m%` | Region TPS (5m average) of the player with gradient | `<gradient:#55ff55:#00aa00>20.00</gradient>` |
+| `%folia_region_tps_15m%` / `%folia_tps_15m%` | Region TPS (15m average) of the player with gradient | `<gradient:#55ff55:#00aa00>20.00</gradient>` |
+| `%folia_region_tps_raw%` / `%folia_region_tps_5s_raw%` | Region TPS (5s average) plain text | `20.00` |
+| `%folia_region_tps_15s_raw%` | Region TPS (15s average) plain text | `20.00` |
+| `%folia_region_tps_1m_raw%` | Region TPS (1m average) plain text | `20.00` |
+| `%folia_region_tps_5m_raw%` | Region TPS (5m average) plain text | `20.00` |
+| `%folia_region_tps_15m_raw%` | Region TPS (15m average) plain text | `20.00` |
+
 ## License
 The PATCHES-LICENSE file describes the license for api & server patches,
 found in `./patches` and its subdirectories except when noted otherwise.
