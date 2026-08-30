@@ -9,13 +9,13 @@ index 874ffbcc0263ded98462a9fd2529e9a877ab8900..b1d55b7a1b8df53f9022c300ec4e3f78
 --- a/ca/spottedleaf/moonrise/paper/util/BaseChunkSystemHooks.java
 +++ b/ca/spottedleaf/moonrise/paper/util/BaseChunkSystemHooks.java
 @@ -122,6 +122,7 @@ public abstract class BaseChunkSystemHooks implements ca.spottedleaf.moonrise.co
-
+ 
      @Override
      public void onChunkNotTicking(final LevelChunk chunk, final ChunkHolder holder) {
 +        chunk.folia$getChunkHot().clear(); // Folia - status bars
          chunk.getLevel().getCurrentWorldData().removeTickingChunk(chunk); // Folia - region threading
      }
-
+ 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
 index 01758ab2084c0b2d6a10d427ddf0e63753a64bdc..48121033a4256da54f37a156da94c8968d5bd100 100644
 --- a/net/minecraft/server/MinecraftServer.java
@@ -56,7 +56,7 @@ index 3471200d54b938ef82f142efc2fcb096d72ec7b4..1f7cff1cdb26b382c4ec053a3c7128f5
          profilerFiller.pop();
 -        } finally { profiler.stopTimer(timerId); } // Folia - profiler
 +        } finally { profiler.stopTimer(timerId); if (folia$chunk != null) folia$chunk.folia$getChunkHot().stopTickingAndCount(); } // Folia - profiler // Folia - status bars
-
+ 
          for (Entity entity1 : entity.getPassengers()) {
              this.tickPassenger(entity, entity1, isActive); // Paper - EAR 2
 @@ -1473,6 +1475,8 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
@@ -76,9 +76,9 @@ index 3471200d54b938ef82f142efc2fcb096d72ec7b4..1f7cff1cdb26b382c4ec053a3c7128f5
 +            } finally { profiler.stopTimer(timerId); if (folia$chunk != null) folia$chunk.folia$getChunkHot().stopTickingAndCount(); } // Folia - profiler // Folia - status bars
          }
      }
-
+ 
 diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
-index 01e067a0045e59094bf271c448f158f932199aa3..f688aa0789a63b1b1bccefaa846d032e6bd22ee3 100644
+index 01e067a0045e59094bf271c448f158f932199aa3..7567567b48363a40840708f3cf79ad75a1504b24 100644
 --- a/net/minecraft/server/level/ServerPlayer.java
 +++ b/net/minecraft/server/level/ServerPlayer.java
 @@ -225,6 +225,11 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
@@ -135,7 +135,7 @@ index 01e067a0045e59094bf271c448f158f932199aa3..f688aa0789a63b1b1bccefaa846d032e
 +        }
 +        return total;
      }
-
+ 
      private void updatePlayerAttributes() {
 diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
 index dfc3d047f25499820f84d858ccc29c90f2fe3fbc..c022b86069ac53e93a8cddbbc3fe05e5be2d45d6 100644
@@ -147,7 +147,7 @@ index dfc3d047f25499820f84d858ccc29c90f2fe3fbc..c022b86069ac53e93a8cddbbc3fe05e5
      private ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkAndHolder;
 +    private final io.papermc.paper.threadedregions.ChunkHot folia$chunkHot = new io.papermc.paper.threadedregions.ChunkHot(); // Folia - status bars
 +    public io.papermc.paper.threadedregions.ChunkHot folia$getChunkHot() { return this.folia$chunkHot; } // Folia - status bars
-
+ 
      @Override
      public final boolean moonrise$isPostProcessingDone() {
 @@ -967,6 +969,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
@@ -164,7 +164,7 @@ index dfc3d047f25499820f84d858ccc29c90f2fe3fbc..c022b86069ac53e93a8cddbbc3fe05e5
                          }
 -                        } finally { profiler.stopTimer(timerId); } // Folia - profiler
 +                        } finally { profiler.stopTimer(timerId); LevelChunk.this.folia$chunkHot.stopTickingAndCount(); } // Folia - profiler // Folia - status bars
-
+ 
                          profilerFiller.pop();
                      } catch (Throwable var5) {
 diff --git a/net/minecraft/world/level/redstone/NeighborUpdater.java b/net/minecraft/world/level/redstone/NeighborUpdater.java
