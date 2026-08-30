@@ -46,6 +46,7 @@ subprojects {
     repositories {
         mavenCentral()
         maven(paperMavenPublicUrl)
+        maven("https://repo.extendedclip.com/releases/")
     }
 
     dependencies {
