@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Sun, 30 Aug 2026 18:51:21 +0200
+Subject: [PATCH] Add PlaceholderAPI support for CPU bar metrics and region TPS
+
+
+diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+index 79cd246e96df7a140e5bbc684f3cfdbc296194f0..6d6bf48c6f08838834b5bd8a8279643db4481dfc 100644
+--- a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
++++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
+@@ -80,6 +80,24 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+                 }
+             }
+         }, 1L, 20L);
++        tryRegisterPlaceholderExpansion();
++        Bukkit.getPluginManager().registerEvents(new org.bukkit.event.Listener() {
++            @org.bukkit.event.EventHandler
++            public void onPluginEnable(final org.bukkit.event.server.PluginEnableEvent event) {
++                if ("PlaceholderAPI".equalsIgnoreCase(event.getPlugin().getName())) {
++                    tryRegisterPlaceholderExpansion();
++                }
++            }
++        }, INTERNAL_PLUGIN);
++    }
++
++    private static boolean papiRegistered = false;
++    private static void tryRegisterPlaceholderExpansion() {
++        if (papiRegistered) return;
++        if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
++            PapiHook.register();
++            papiRegistered = true;
++        }
+     }
+ 
+     public static synchronized void stop() {
+@@ -467,32 +485,8 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+     private static void update(final Player player, final BarType type, final BossBar bar) {
+         final MiniMessage mm = MiniMessage.miniMessage();
+         if (type == BarType.CPU) {
++            updateCpuMetric();
+             final int procs = Runtime.getRuntime().availableProcessors();
+-            double raw = 0.0;
+-            try {
+-                final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
+-                if (baseOs instanceof com.sun.management.OperatingSystemMXBean os) {
+-                	final long procCpuTime = os.getProcessCpuTime();
+-                	final long now = System.nanoTime();
+-                	if (procCpuTime >= 0L) {
+-                		if (lastProcCpuTime >= 0.0 && lastWallClockTime >= 0L) {
+-                			final long cpuDiff = procCpuTime - (long) lastProcCpuTime;
+-                			final long wallDiff = now - lastWallClockTime;
+-                			if (wallDiff > 0L && cpuDiff >= 0L) {
+-                				raw = ((double) cpuDiff / (double) wallDiff) * 100.0D;
+-                			}
+-                		}
+-                		lastProcCpuTime = procCpuTime;
+-                		lastWallClockTime = now;
+-                	}
+-                }
+-            } catch (final Throwable ignored) {}
+-            if (!hasSmoothed) {
+-                smoothedCpuPercent = raw;
+-                hasSmoothed = true;
+-            } else {
+-                smoothedCpuPercent = (0.3D * raw) + ((1.0D - 0.3D) * smoothedCpuPercent);
+-            }
+             final double maxPercent = Math.max(1.0D, procs * 100.0D);
+             final double ratio = Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
+             final String g = cpuGradient(ratio);
+@@ -574,4 +568,141 @@ public final class FoliaStatusBarCommand extends BukkitCommand {
+         private final NamespacedKey key;
+         BarType(final String key) { this.key = new NamespacedKey("folia", key); }
+     }
++    private static double updateCpuMetric() {
++        final int procs = Runtime.getRuntime().availableProcessors();
++        double raw = 0.0;
++        try {
++            final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
++            if (baseOs instanceof com.sun.management.OperatingSystemMXBean os) {
++                final long procCpuTime = os.getProcessCpuTime();
++                final long now = System.nanoTime();
++                if (procCpuTime >= 0L) {
++                    if (lastProcCpuTime >= 0.0 && lastWallClockTime >= 0L) {
++                        final long cpuDiff = procCpuTime - (long) lastProcCpuTime;
++                        final long wallDiff = now - lastWallClockTime;
++                        if (wallDiff > 0L && cpuDiff >= 0L) {
++                            raw = ((double) cpuDiff / (double) wallDiff) * 100.0D;
++                        }
++                    }
++                    lastProcCpuTime = procCpuTime;
++                    lastWallClockTime = now;
++                }
++            }
++        } catch (final Throwable ignored) {}
++        if (!hasSmoothed) {
++            smoothedCpuPercent = raw;
++            hasSmoothed = true;
++        } else {
++            smoothedCpuPercent = (0.3D * raw) + ((1.0D - 0.3D) * smoothedCpuPercent);
++        }
++        return smoothedCpuPercent;
++    }
++
++    public static double getCpuPercent() {
++        updateCpuMetric();
++        return smoothedCpuPercent;
++    }
++
++    public static double getCpuRatio() {
++        updateCpuMetric();
++        final int procs = Runtime.getRuntime().availableProcessors();
++        final double maxPercent = Math.max(1.0D, procs * 100.0D);
++        return Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
++    }
++
++    public static double getCpuClockGhz() {
++        return readCpuClockGhz();
++    }
++
++    public static double getCpuTempC() {
++        return readCpuTempC();
++    }
++
++    private static final class PapiHook {
++        static void register() {
++            try {
++                new me.clip.placeholderapi.expansion.PlaceholderExpansion() {
++                    @Override
++                    public @NotNull String getIdentifier() {
++                        return "folia";
++                    }
++
++                    @Override
++                    public @NotNull String getAuthor() {
++                        return "Folia";
++                    }
++
++                    @Override
++                    public @NotNull String getVersion() {
++                        return "1.0";
++                    }
++
++                    @Override
++                    public boolean persist() {
++                        return true;
++                    }
++
++                    @Override
++                    public String onRequest(org.bukkit.OfflinePlayer player, @NotNull String params) {
++                        final String lower = params.toLowerCase(Locale.ROOT);
++                        final double ratio = FoliaStatusBarCommand.getCpuRatio();
++                        final String cpuGrad = cpuGradient(ratio);
++                        return switch (lower) {
++                            case "cpu_percent", "cpubar_percent", "cpu_pct", "cpubar_pct" ->
++                                cpuGrad + String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D) + GRAD_END;
++                            case "cpu_percent_raw", "cpubar_percent_raw", "cpu_percent_plain" ->
++                                String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D);
++                            case "cpu_percent_num" ->
++                                String.format(Locale.ROOT, "%.2f", ratio * 100.0D);
++                            case "cpu_process", "cpubar_cpu", "cpu" ->
++                                cpuGrad + String.format(Locale.ROOT, "%.2f", FoliaStatusBarCommand.getCpuPercent()) + GRAD_END;
++                            case "cpu_process_raw", "cpu_raw" ->
++                                String.format(Locale.ROOT, "%.2f", FoliaStatusBarCommand.getCpuPercent());
++                            case "cpu_clock", "cpubar_clock" -> {
++                                final double clock = FoliaStatusBarCommand.getCpuClockGhz();
++                                if (Double.isNaN(clock)) yield "<dark_gray>N/A</dark_gray>";
++                                yield clockGradient(clock) + String.format(Locale.ROOT, "%.2fGHz", clock) + GRAD_END;
++                            }
++                            case "cpu_clock_raw" -> {
++                                final double clock = FoliaStatusBarCommand.getCpuClockGhz();
++                                yield Double.isNaN(clock) ? "N/A" : String.format(Locale.ROOT, "%.2fGHz", clock);
++                            }
++                            case "cpu_temp", "cpubar_temp" -> {
++                                final double temp = FoliaStatusBarCommand.getCpuTempC();
++                                if (Double.isNaN(temp)) yield "<dark_gray>N/A</dark_gray>";
++                                yield tempGradient(temp) + String.format(Locale.ROOT, "%.1f°C", temp) + GRAD_END;
++                            }
++                            case "cpu_temp_raw" -> {
++                                final double temp = FoliaStatusBarCommand.getCpuTempC();
++                                yield Double.isNaN(temp) ? "N/A" : String.format(Locale.ROOT, "%.1f°C", temp);
++                            }
++                            case "region_tps", "tps_region", "region_tps_5s", "tps_5s" -> formatRegionTps(player, 0, true);
++                            case "region_tps_15s", "tps_15s" -> formatRegionTps(player, 1, true);
++                            case "region_tps_1m", "tps_1m" -> formatRegionTps(player, 2, true);
++                            case "region_tps_5m", "tps_5m" -> formatRegionTps(player, 3, true);
++                            case "region_tps_15m", "tps_15m" -> formatRegionTps(player, 4, true);
++                            case "region_tps_raw", "region_tps_5s_raw", "tps_5s_raw" -> formatRegionTps(player, 0, false);
++                            case "region_tps_15s_raw", "tps_15s_raw" -> formatRegionTps(player, 1, false);
++                            case "region_tps_1m_raw", "tps_1m_raw" -> formatRegionTps(player, 2, false);
++                            case "region_tps_5m_raw", "tps_5m_raw" -> formatRegionTps(player, 3, false);
++                            case "region_tps_15m_raw", "tps_15m_raw" -> formatRegionTps(player, 4, false);
++                            default -> null;
++                        };
++                    }
++
++                    private String formatRegionTps(org.bukkit.OfflinePlayer offlinePlayer, int index, boolean color) {
++                        if (offlinePlayer == null || !offlinePlayer.isOnline()) return "*20.0";
++                        final Player p = offlinePlayer.getPlayer();
++                        if (p == null) return "*20.0";
++                        final double[] tpsArr = Bukkit.getRegionTPS(p.getLocation());
++                        if (tpsArr == null || index >= tpsArr.length) return "*20.0";
++                        final double tps = Math.min(20.0D, tpsArr[index]);
++                        final String formatted = String.format(Locale.ROOT, "%.2f", tps);
++                        if (!color) return formatted;
++                        return tpsGradient(tps) + formatted + GRAD_END;
++                    }
++                }.register();
++            } catch (final Throwable ignored) {}
++        }
++    }
+ }
