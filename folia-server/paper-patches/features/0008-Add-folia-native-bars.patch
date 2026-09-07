@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..79cd246e96df7a140e5bbc684f3cfdbc296194f0
+index 0000000000000000000000000000000000000000..260e9e50fb846d54312f0e7a5778c3459e8d48cf
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,566 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.moonrise.common.time.TickData;
@@ -261,8 +261,6 @@ index 0000000000000000000000000000000000000000..79cd246e96df7a140e5bbc684f3cfdbc
 +        }, () -> BARS.get(type).remove(uuid), 1L, 20L);
 +    }
 +
-+    private static double lastProcCpuTime = -1.0;
-+    private static long lastWallClockTime = -1L;
 +    private static double smoothedCpuPercent = 0.0D;
 +    private static boolean hasSmoothed = false;
 +
@@ -543,19 +541,10 @@ index 0000000000000000000000000000000000000000..79cd246e96df7a140e5bbc684f3cfdbc
 +            try {
 +                final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
 +                if (baseOs instanceof com.sun.management.OperatingSystemMXBean os) {
-+                	final long procCpuTime = os.getProcessCpuTime();
-+                	final long now = System.nanoTime();
-+                	if (procCpuTime >= 0L) {
-+                		if (lastProcCpuTime >= 0.0 && lastWallClockTime >= 0L) {
-+                			final long cpuDiff = procCpuTime - (long) lastProcCpuTime;
-+                			final long wallDiff = now - lastWallClockTime;
-+                			if (wallDiff > 0L && cpuDiff >= 0L) {
-+                				raw = ((double) cpuDiff / (double) wallDiff) * 100.0D;
-+                			}
-+                		}
-+                		lastProcCpuTime = procCpuTime;
-+                		lastWallClockTime = now;
-+                	}
++                    final double cpuLoad = os.getCpuLoad();
++                    if (cpuLoad >= 0.0D) {
++                        raw = cpuLoad * procs * 100.0D;
++                    }
 +                }
 +            } catch (final Throwable ignored) {}
 +            if (!hasSmoothed) {
