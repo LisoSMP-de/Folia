@@ -1,0 +1,93 @@
+name: Sync Changes to 26.2
+
+on:
+  push:
+    branches:
+      - ver/1.21.11
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Target branch name in Folia"
+        required: true
+        default: "ver/26.2.x"
+      source_branch:
+        description: "Source branch name"
+        required: true
+        default: "ver/1.21.11"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Git Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Git User Details
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "Github Actions"
+
+      - name: Fetch Branches & Upstream
+        run: |
+          git remote add upstream https://github.com/PaperMC/Folia.git 2>/dev/null || true
+          git fetch upstream ver/1.21.11 ver/26.2.x || true
+          git fetch origin ver/1.21.11:ver/1.21.11 || true
+          git fetch origin ver/26.2.x:ver/26.2.x || true
+
+      - name: Port changes to target branch
+        run: |
+          TARGET_BRANCH="${{ inputs.target_branch || 'ver/26.2.x' }}"
+          SOURCE_BRANCH="${{ inputs.source_branch || 'ver/1.21.11' }}"
+
+          echo "Source: $SOURCE_BRANCH"
+          echo "Target: $TARGET_BRANCH"
+
+          git checkout "$TARGET_BRANCH"
+
+          BASE_COMMIT=$(git merge-base "$SOURCE_BRANCH" upstream/"$SOURCE_BRANCH" 2>/dev/null || git merge-base "$SOURCE_BRANCH" origin/"$SOURCE_BRANCH")
+          COMMITS=$(git rev-list --reverse "$BASE_COMMIT..$SOURCE_BRANCH")
+
+          for commit in $COMMITS; do
+            COMMIT_TITLE=$(git log -1 --format=%s "$commit")
+            echo "Processing commit $commit: $COMMIT_TITLE"
+
+            # Skip sync workflow commit itself
+            if [ "$COMMIT_TITLE" = "Add workflow to sync changes to ver/26.2.x" ]; then
+              echo "Skipping sync workflow commit."
+              continue
+            fi
+
+            if [ -n "$(git log --fixed-strings --grep="$COMMIT_TITLE" -1 "$TARGET_BRANCH" --oneline)" ]; then
+              echo "Commit '$COMMIT_TITLE' already exists on $TARGET_BRANCH, skipping."
+              continue
+            fi
+
+            if ! git cherry-pick --strategy-option=theirs "$commit"; then
+              echo "Conflict detected on $commit, auto-resolving..."
+              git rm -r --ignore-unmatch folia-server/paper-patches/features/0002-Update-Logo.patch 2>/dev/null || true
+              git checkout --theirs . 2>/dev/null || true
+              git add -A
+              if ! git cherry-pick --continue --no-edit; then
+                echo "Could not continue cherry-pick for $commit, skipping."
+                git cherry-pick --abort || true
+              fi
+            fi
+          done
+
+          # Adjust build workflow if present on target branch
+          if [ -f .github/workflows/build.yml ]; then
+            sed -i 's|branches: \[ "ver/1.21.11" \]|branches: \[ "'"$TARGET_BRANCH"'" \]|g' .github/workflows/build.yml
+            sed -i 's|tag_name: 1.21.11-latest|tag_name: 26.2-latest|g' .github/workflows/build.yml
+            sed -i 's|name: Folia 1.21.11 Latest|name: Folia 26.2 Latest|g' .github/workflows/build.yml
+            if ! git diff --quiet .github/workflows/build.yml; then
+              git add .github/workflows/build.yml
+              git commit -m "ci: update build workflow for $TARGET_BRANCH" || true
+            fi
+          fi
+
+          git push origin "$TARGET_BRANCH"
