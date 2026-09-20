@@ -2,7 +2,7 @@ name: createMojmapPaperclipJar
 
 on:
   push:
-    branches: [ "ver/1.21.11" ]
+    branches: [ "ver/26.2.x" ]
   workflow_dispatch:
 
 jobs:
@@ -29,8 +29,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: 1.21.11-latest
-          name: Folia 1.21.11 Latest
+          tag_name: 26.2-latest
+          name: Folia 26.2 Latest
           files: folia-server/build/libs/folia-paperclip-*-mojmap.jar
           make_latest: true
           overwrite: true
