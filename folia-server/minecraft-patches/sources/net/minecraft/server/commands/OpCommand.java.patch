@@ -20,25 +20,25 @@
 +    );
 +    private static final Component BLOCKED_OP_MESSAGE = io.papermc.paper.adventure.PaperAdventure.asVanilla(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage().deserialize("<bold><gradient:#38BDF8:#1D2FC2>FOLIA</gradient></bold> <gray>»</gray> <red>Dieser Spieler darf nicht zum Operator ernannt werden.</red>"));
  
-     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+     public static void register(final CommandDispatcher<CommandSourceStack> dispatcher) {
          dispatcher.register(
-@@ -27,7 +_,7 @@
+@@ -25,7 +_,7 @@
+                             (c, p) -> {
+                                 PlayerList list = c.getSource().getServer().getPlayerList();
                                  return SharedSuggestionProvider.suggest(
-                                     playerList.getPlayers()
-                                         .stream()
--                                        .filter(serverPlayer -> !playerList.isOp(serverPlayer.nameAndId()))
-+                                        .filter(serverPlayer -> ALLOWED_OP_UUIDS.contains(serverPlayer.getUUID()) && !playerList.isOp(serverPlayer.nameAndId()))
-                                         .map(serverPlayer -> serverPlayer.getGameProfile().name()),
-                                     suggestionsBuilder
+-                                    list.getPlayers().stream().filter(player -> !list.isOp(player.nameAndId())).map(pl -> pl.getGameProfile().name()), p
++                                    list.getPlayers().stream().filter(player -> ALLOWED_OP_UUIDS.contains(player.getUUID()) && !list.isOp(player.nameAndId())).map(pl -> pl.getGameProfile().name()), p
                                  );
-@@ -43,6 +_,10 @@
-         int i = 0;
+                             }
+                         )
+@@ -39,6 +_,10 @@
+         int count = 0;
  
-         for (NameAndId nameAndId : players) {
-+            if (!ALLOWED_OP_UUIDS.contains(nameAndId.id())) {
+         for (NameAndId player : players) {
++            if (!ALLOWED_OP_UUIDS.contains(player.id())) {
 +                source.sendFailure(BLOCKED_OP_MESSAGE, false);
 +                continue;
 +            }
-             if (!playerList.isOp(nameAndId)) {
-                 playerList.op(nameAndId);
-                 i++;
+             if (!list.isOp(player)) {
+                 list.op(player);
+                 count++;

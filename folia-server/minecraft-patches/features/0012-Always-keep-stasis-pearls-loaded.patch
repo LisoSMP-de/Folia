@@ -1,14 +1,14 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Codex <codex@liso.smp>
-Date: Mon, 17 Aug 2026 21:50:00 +0200
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 20:48:55 +0200
 Subject: [PATCH] Always keep stasis pearls loaded
 
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..9ffb2b26d3f5844f39173e9882e9092d232d9f7c 100644
+index aa53138b3670a8337b639472a6ab5ce46702ff76..1073d41b9324eab60f0059f45e3b54eba27d3209 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
-@@ -78,8 +78,8 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -74,8 +74,8 @@ public final class ServerEntityLookup extends EntityLookup {
              ((ChunkSystemServerLevel)this.serverWorld).moonrise$getNearbyPlayers().tickPlayer(player);
          }
          if (entity instanceof ThrownEnderpearl enderpearl && (oldSectionX != newSectionX || oldSectionZ != newSectionZ)) {
@@ -18,7 +18,7 @@ index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..9ffb2b26d3f5844f39173e9882e9092d
          }
          PlatformHooks.get().entityMove(
              entity,
-@@ -141,18 +141,12 @@ public final class ServerEntityLookup extends EntityLookup {
+@@ -133,19 +133,12 @@ public final class ServerEntityLookup extends EntityLookup {
      }
  
      private void addEnderPearl(final long coordinate, final int entityId) { // Folia - region threading
@@ -34,18 +34,19 @@ index b31b55f00e2ce1bd6c1011fe852bd1dbb37de524..9ffb2b26d3f5844f39173e9882e9092d
 -        if (!this.keepEnderPearlsTicking) {
 -            return;
 -        }
- 
+-
          // Folia - region threading
          ((ChunkSystemServerLevel)this.serverWorld).moonrise$getChunkTaskScheduler().chunkHolderManager
+             .removeTicketAtLevel(ENDER_PEARL_TICKER, coordinate, ChunkHolderManager.ENTITY_TICKING_TICKET_LEVEL, Integer.valueOf(entityId)); // Folia - region threading
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 7d8c528a76e6a95d27368bc459d654c6ef66dd8f..6fe8f4cb7bc896f4788141cf855f52a0ecda52a2 100644
+index d0dba5cc351903fb762e231a95f302479794185f..f00df593ca6808c562e6748905be20d1837fb3ec 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -257,6 +257,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
-             int sectionPosZ = SectionPos.blockToSectionCoord(this.position().z());
-             Entity entity = this.owner != null ? findOwnerIncludingDeadPlayer(serverLevel, this.owner.getUUID()) : null;
-             if (entity instanceof ServerPlayer serverPlayer
+@@ -264,6 +264,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+             int previousChunkZ = SectionPos.blockToSectionCoord(this.position().z());
+             Entity owner = this.owner != null ? findOwnerIncludingDeadPlayer(serverLevel, this.owner.getUUID()) : null;
+             if (owner instanceof ServerPlayer serverPlayer
 +                && !serverPlayer.isRemoved()
-                 && !entity.isAlive()
+                 && !owner.isAlive()
                  && !serverPlayer.wonGame
                  && serverPlayer.level().getGameRules().get(GameRules.ENDER_PEARLS_VANISH_ON_DEATH)) {

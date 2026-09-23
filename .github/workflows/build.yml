@@ -12,7 +12,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout Git Repository
-        uses: namespacelabs/nscloud-checkout-action@v9
+        uses: actions/checkout@v6
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
@@ -25,12 +25,12 @@ jobs:
       - name: Apply Patches
         run: ./gradlew applyAllPatches --stacktrace
       - name: Build Paperclip
-        run: ./gradlew createMojmapPaperclipJar --stacktrace
+        run: ./gradlew createPaperclipJar --stacktrace
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: 26.2-latest
           name: Folia 26.2 Latest
-          files: folia-server/build/libs/folia-paperclip-*-mojmap.jar
+          files: folia-server/build/libs/folia-paperclip-*.jar
           make_latest: true
           overwrite: true
