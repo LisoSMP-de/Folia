@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
-Date: Tue, 25 Aug 2026 08:33:33 +0200
+Date: Wed, 23 Sep 2026 21:16:35 +0200
 Subject: [PATCH] Add folia native bars
 
 
@@ -65,13 +65,13 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..260e9e50fb846d54312f0e7a5778c3459e8d48cf
+index 0000000000000000000000000000000000000000..4f963bd768fbdd436cd25417d30cf32fa450cf45
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 @@ -0,0 +1,566 @@
 +package io.papermc.paper.threadedregions;
 +
-+import ca.spottedleaf.moonrise.common.time.TickData;
++import ca.spottedleaf.common.time.TickData;
 +import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 +import java.lang.management.ManagementFactory;
 +import java.lang.management.MemoryUsage;
