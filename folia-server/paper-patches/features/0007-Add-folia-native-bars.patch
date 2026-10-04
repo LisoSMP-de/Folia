@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..4f963bd768fbdd436cd25417d30cf32fa450cf45
+index 0000000000000000000000000000000000000000..e8f5ee93dcfe4501f42af9f2e199618ac440ec50
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,656 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.common.time.TickData;
@@ -142,6 +142,7 @@ index 0000000000000000000000000000000000000000..4f963bd768fbdd436cd25417d30cf32f
 +
 +    public static synchronized void start() {
 +        if (scannerTask != null && !scannerTask.isCancelled()) return;
++        LOGGER.info("[FoliaStatusBars] Host CPUs detected: " + HOST_CPUS);
 +        scannerTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(INTERNAL_PLUGIN, task -> {
 +            for (final Player player : Bukkit.getOnlinePlayers()) {
 +                for (final BarType type : BarType.values()) {
@@ -528,6 +529,95 @@ index 0000000000000000000000000000000000000000..4f963bd768fbdd436cd25417d30cf32f
 +        return Double.NaN;
 +    }
 +
++    // --- Host CPU count detection ---
++    private static final int HOST_CPUS = detectHostCpuCount();
++
++    private static int detectHostCpuCount() {
++        int detected = 0;
++        if (!IS_WINDOWS) {
++            detected = readCpuRangeFile(Path.of("/sys/devices/system/cpu/online"));
++            if (detected <= 0) {
++                detected = readCpuRangeFile(Path.of("/sys/devices/system/cpu/possible"));
++            }
++            if (detected <= 0) {
++                try {
++                    final Path cpuinfo = Path.of("/proc/cpuinfo");
++                    if (Files.isReadable(cpuinfo)) {
++                        int count = 0;
++                        for (final String line : Files.readAllLines(cpuinfo)) {
++                            if (line.toLowerCase(Locale.ROOT).startsWith("processor") && line.contains(":")) {
++                                count++;
++                            }
++                        }
++                        if (count > 0) detected = count;
++                    }
++                } catch (final Throwable ignored) {}
++            }
++        } else {
++            try {
++                final String numProcs = System.getenv("NUMBER_OF_PROCESSORS");
++                if (numProcs != null && !numProcs.isBlank()) {
++                    final int val = Integer.parseInt(numProcs.trim());
++                    if (val > 0) detected = val;
++                }
++            } catch (final Throwable ignored) {}
++
++            if (detected <= 0) {
++                try {
++                    final Process p = new ProcessBuilder(
++                        "powershell", "-NoProfile", "-Command",
++                        "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum"
++                    ).redirectErrorStream(true).start();
++                    String line;
++                    try (final BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
++                        line = r.readLine();
++                    }
++                    p.waitFor();
++                    if (line != null && !line.isBlank()) {
++                        final int val = Integer.parseInt(line.trim());
++                        if (val > 0) detected = val;
++                    }
++                } catch (final Throwable ignored) {}
++            }
++        }
++
++        return Math.max(detected, Math.max(1, Runtime.getRuntime().availableProcessors()));
++    }
++
++    private static int readCpuRangeFile(final Path path) {
++        try {
++            if (Files.isReadable(path)) {
++                final String content = Files.readString(path).trim();
++                return parseCpuRange(content);
++            }
++        } catch (final Throwable ignored) {}
++        return 0;
++    }
++
++    private static int parseCpuRange(final String rangeStr) {
++        if (rangeStr == null || rangeStr.isBlank()) return 0;
++        try {
++            int count = 0;
++            final String[] parts = rangeStr.split(",");
++            for (final String part : parts) {
++                final String trimmed = part.trim();
++                if (trimmed.isEmpty()) continue;
++                final int dashIdx = trimmed.indexOf('-');
++                if (dashIdx != -1) {
++                    final int start = Integer.parseInt(trimmed.substring(0, dashIdx).trim());
++                    final int end = Integer.parseInt(trimmed.substring(dashIdx + 1).trim());
++                    count += Math.max(0, end - start + 1);
++                } else {
++                    Integer.parseInt(trimmed);
++                    count++;
++                }
++            }
++            return count;
++        } catch (final Throwable ignored) {
++            return 0;
++        }
++    }
++
 +    private static void remove(final Player player, final BarType type) {
 +        final BossBar bar = BARS.get(type).remove(player.getUniqueId());
 +        if (bar != null) player.hideBossBar(bar);
@@ -536,7 +626,7 @@ index 0000000000000000000000000000000000000000..4f963bd768fbdd436cd25417d30cf32f
 +    private static void update(final Player player, final BarType type, final BossBar bar) {
 +        final MiniMessage mm = MiniMessage.miniMessage();
 +        if (type == BarType.CPU) {
-+            final int procs = Runtime.getRuntime().availableProcessors();
++            final int procs = HOST_CPUS;
 +            double raw = 0.0;
 +            try {
 +                final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
