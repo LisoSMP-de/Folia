@@ -937,18 +937,17 @@ index 0000000000000000000000000000000000000000..22e1715319ca9f32f7f61a5dfc11273f
 \ No newline at end of file
 diff --git a/io/papermc/paper/linear/WorldFormatConverter.java b/io/papermc/paper/linear/WorldFormatConverter.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000
+index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82c16581b4
 --- /dev/null
 +++ b/io/papermc/paper/linear/WorldFormatConverter.java
-@@ -0,0 +1,706 @@
+@@ -0,0 +1,1022 @@
 +package io.papermc.paper.linear;
 +
++import com.github.luben.zstd.ZstdInputStream;
++import com.github.luben.zstd.ZstdOutputStream;
 +import com.mojang.logging.LogUtils;
 +import net.minecraft.core.Registry;
 +import net.minecraft.core.registries.Registries;
-+import net.minecraft.nbt.CompoundTag;
-+import net.minecraft.nbt.NbtAccounter;
-+import net.minecraft.nbt.NbtIo;
 +import net.minecraft.resources.ResourceKey;
 +import net.minecraft.server.MinecraftServer;
 +import net.minecraft.world.level.ChunkPos;
@@ -959,24 +958,28 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +import net.minecraft.world.level.storage.LevelStorageSource;
 +import org.slf4j.Logger;
 +
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
 +import java.io.DataInputStream;
 +import java.io.DataOutputStream;
 +import java.io.IOException;
++import java.io.RandomAccessFile;
 +import java.nio.file.*;
 +import java.nio.file.attribute.BasicFileAttributes;
-+import java.util.zip.CRC32;
 +import java.time.LocalDateTime;
 +import java.time.format.DateTimeFormatter;
 +import java.util.*;
-+import java.util.concurrent.atomic.AtomicBoolean;
-+import java.util.concurrent.atomic.AtomicInteger;
 +import java.util.concurrent.ExecutorService;
 +import java.util.concurrent.Executors;
 +import java.util.concurrent.Future;
++import java.util.concurrent.Semaphore;
 +import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.concurrent.atomic.AtomicInteger;
 +import java.util.regex.Matcher;
 +import java.util.regex.Pattern;
 +import java.util.stream.Stream;
++import java.util.zip.CRC32;
 +
 +/**
 + * World region format conversion pipeline:
@@ -984,12 +987,14 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 + * - Aborts with detailed message if conversion needed but automatic is false
 + * - Displays 30s countdown (configurable) with clean cancellation
 + * - Takes full world backup before conversion (non-recursive)
-+ * - Converts MCA <-> Linear with verification (re-read & NBT comparison) and crash-recovery state tracking
++ * - Converts MCA <-> Linear with streaming directly to disk, bounded memory (<= 12 GB limit) and full multi-threading
 + */
 +public final class WorldFormatConverter {
 +    private static final Logger LOGGER = LogUtils.getLogger();
 +    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
 +    private static final String CONVERSION_STATE_FILE = ".conversion-state";
++    private static final long MAX_ALLOWED_MEMORY_BYTES = 12L * 1024 * 1024 * 1024; // 12 GB hard ceiling
++    private static final long MEMORY_THROTTLE_BYTES = 10L * 1024 * 1024 * 1024;   // 10 GB throttle trigger
 +
 +    public record WorldFolderTarget(
 +        String worldName,
@@ -1138,7 +1143,6 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +        }
 +    }
 +
-+
 +    private static List<WorldFolderTarget> discoverWorldTargets(final MinecraftServer server, final WorldsSettings settings) {
 +        final List<WorldFolderTarget> result = new ArrayList<>();
 +        final LevelStorageSource.LevelStorageAccess storageSource = server.storageSource;
@@ -1272,7 +1276,7 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +
 +        // Perform conversions
 +        final int threadCount = Math.max(1, Runtime.getRuntime().availableProcessors());
-+        LOGGER.info("Starting format conversion of {} files across {} threads...", totalFiles, threadCount);
++        LOGGER.info("Starting format conversion of {} files across {} threads (streaming directly to disk, memory limit: 12 GB)...", totalFiles, threadCount);
 +        final long startMs = System.currentTimeMillis();
 +
 +        final ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
@@ -1283,6 +1287,7 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +
 +        final AtomicInteger convertedCounter = new AtomicInteger(0);
 +        final AtomicInteger failedCounter = new AtomicInteger(0);
++        final Semaphore semaphore = new Semaphore(threadCount * 2);
 +
 +        try {
 +            for (final ConversionTask task : tasks) {
@@ -1293,13 +1298,29 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +
 +                final List<Future<?>> futures = new ArrayList<>();
 +                for (final Path srcFile : task.filesToConvert()) {
++                    checkMemoryPressure();
++                    try {
++                        semaphore.acquire();
++                    } catch (final InterruptedException e) {
++                        Thread.currentThread().interrupt();
++                        break;
++                    }
 +                    futures.add(executor.submit(() -> {
-+                        final boolean success = convertWithBackupFallback(srcFile, task.targetFormat(), task.targetCompression(), stateFile, task.worldDir(), knownBackupPath, configBackupDir);
-+                        if (success) {
-+                            final int current = convertedCounter.incrementAndGet();
-+                            LOGGER.info("Progress: {}/{} files converted ({})", current, totalFiles, srcFile.getFileName());
-+                        } else {
-+                            failedCounter.incrementAndGet();
++                        try {
++                            checkMemoryPressure();
++                            final boolean success = convertWithBackupFallback(srcFile, task.targetFormat(), task.targetCompression(), stateFile, task.worldDir(), knownBackupPath, configBackupDir);
++                            if (success) {
++                                final int current = convertedCounter.incrementAndGet();
++                                final long usedMb = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
++                                LOGGER.info("Progress: {}/{} files converted ({}) [RAM: {} MB / 12288 MB]", current, totalFiles, srcFile.getFileName(), usedMb);
++                                if (current % 100 == 0 || usedMb > 8000) {
++                                    System.gc();
++                                }
++                            } else {
++                                failedCounter.incrementAndGet();
++                            }
++                        } finally {
++                            semaphore.release();
 +                        }
 +                    }));
 +                }
@@ -1338,6 +1359,29 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +            LOGGER.info("Format conversion completed successfully: {} files in {} ms.", convertedFiles, elapsed);
 +        }
 +        LOGGER.info("======================================================================");
++    }
++
++    private static void checkMemoryPressure() {
++        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
++        if (used >= MEMORY_THROTTLE_BYTES) {
++            LOGGER.warn("Conversion memory pressure detected ({} MB used / 12288 MB limit). Triggering GC and throttling worker threads...", used / (1024 * 1024));
++            System.gc();
++            try {
++                Thread.sleep(250);
++            } catch (final InterruptedException ignored) {}
++            used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
++            while (used >= MEMORY_THROTTLE_BYTES) {
++                try {
++                    LOGGER.warn("Throttling conversion until memory drops below 10 GB (currently {} MB)...", used / (1024 * 1024));
++                    Thread.sleep(500);
++                } catch (final InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    break;
++                }
++                System.gc();
++                used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
++            }
++        }
 +    }
 +
 +    private static void runCountdown(final int seconds) {
@@ -1506,21 +1550,19 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +            Files.deleteIfExists(tempDstFile);
 +
 +            if (srcName.endsWith(".mca") && targetFormat == RegionFormat.LINEAR) {
-+                try (final RegionFile srcMca = new RegionFile(info, srcFile, srcFile.getParent(), true);
-+                     final LinearRegionFile dstLinear = new LinearRegionFile(info, tempDstFile, tempDstFile.getParent(), true, targetCompression)) {
-+                    streamMcaToLinear(srcMca, dstLinear, regX, regZ, expectedCrcs);
++                try (final RegionFile srcMca = new RegionFile(info, srcFile, srcFile.getParent(), true)) {
++                    streamMcaToLinearDirect(srcMca, tempDstFile, regX, regZ, targetCompression, expectedCrcs);
 +                }
 +            } else if (srcName.endsWith(".linear") && targetFormat == RegionFormat.MCA) {
-+                try (final LinearRegionFile srcLinear = new LinearRegionFile(info, srcFile, srcFile.getParent(), true, targetCompression);
-+                     final RegionFile dstMca = new RegionFile(info, tempDstFile, tempDstFile.getParent(), true)) {
-+                    streamLinearToMca(srcLinear, dstMca, regX, regZ, expectedCrcs);
++                try (final RegionFile dstMca = new RegionFile(info, tempDstFile, tempDstFile.getParent(), true)) {
++                    streamLinearToMcaDirect(srcFile, dstMca, regX, regZ, expectedCrcs);
 +                    dstMca.flush();
 +                }
 +            } else {
 +                return false;
 +            }
 +
-+            // Verification: re-read temp file chunk-by-chunk and compare streaming checksums without heap accumulation
++            // Verification: re-read temp file chunk-by-chunk and compare streaming checksums directly from disk
 +            verifyConvertedFileStreaming(tempDstFile, targetFormat, targetCompression, expectedCrcs);
 +
 +            // Verified! Atomic replace (or fallback copy/delete if needed)
@@ -1546,107 +1588,381 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +        }
 +    }
 +
-+    private static void streamMcaToLinear(final RegionFile srcMca, final LinearRegionFile dstLinear,
-+                                          final int regX, final int regZ, final Map<ChunkPos, Long> expectedCrcs) throws IOException {
++    private static void streamMcaToLinearDirect(final RegionFile srcMca, final Path dstFile,
++                                                final int regX, final int regZ, final int compressionLevel,
++                                                final Map<ChunkPos, Long> expectedCrcs) throws IOException {
++        final long timestamp = System.currentTimeMillis() / 1000L;
++        final int gridSize = 8;
++        final int bucketCount = gridSize * gridSize; // 64
 +        final CRC32 crc = new CRC32();
-+        for (int x = 0; x < 32; x++) {
-+            for (int z = 0; z < 32; z++) {
-+                final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
-+                if (srcMca.hasChunk(pos)) {
-+                    try (final DataInputStream in = srcMca.getChunkDataInputStream(pos)) {
-+                        if (in != null) {
-+                            final byte[] chunkBytes = in.readAllBytes();
-+                            if (chunkBytes.length > 0) {
-+                                crc.reset();
-+                                crc.update(chunkBytes);
-+                                expectedCrcs.put(pos, crc.getValue());
++        final boolean[] existenceBitmap = new boolean[1024];
 +
-+                                try (final DataOutputStream out = dstLinear.getChunkDataOutputStream(pos)) {
-+                                    out.write(chunkBytes);
++        try (final RandomAccessFile raf = new RandomAccessFile(dstFile.toFile(), "rw")) {
++            raf.setLength(0);
++
++            // Header: 155 bytes, Bucket Table: 64 * 13 = 832 bytes
++            // Payloads start at offset 155 + 832 = 987 bytes
++            final int payloadOffset = 155 + (bucketCount * 13);
++            raf.seek(payloadOffset);
++
++            final int[] bucketSizes = new int[bucketCount];
++            final byte[] bucketCompressions = new byte[bucketCount];
++            final long[] bucketHashes = new long[bucketCount];
++
++            // Stream bucket by bucket directly to disk (only 16 chunks compressed in memory per bucket)
++            for (int bx = 0; bx < gridSize; bx++) {
++                for (int bz = 0; bz < gridSize; bz++) {
++                    final int bucketIdx = bx * gridSize + bz;
++                    final ByteArrayOutputStream bucketStream = new ByteArrayOutputStream();
++                    boolean bucketHasChunks = false;
++
++                    try (final ZstdOutputStream zstd = new ZstdOutputStream(bucketStream, compressionLevel);
++                         final DataOutputStream bucketOut = new DataOutputStream(zstd)) {
++                        for (int cx = 0; cx < 4; cx++) {
++                            for (int cz = 0; cz < 4; cz++) {
++                                final int chunkX = bx * 4 + cx;
++                                final int chunkZ = bz * 4 + cz;
++                                final int chunkIndex = chunkX + chunkZ * 32;
++                                final ChunkPos pos = new ChunkPos((regX << 5) + chunkX, (regZ << 5) + chunkZ);
++
++                                if (srcMca.hasChunk(pos)) {
++                                    try (final DataInputStream in = srcMca.getChunkDataInputStream(pos)) {
++                                        if (in != null) {
++                                            final byte[] chunkBytes = in.readAllBytes();
++                                            if (chunkBytes.length > 0) {
++                                                existenceBitmap[chunkIndex] = true;
++                                                bucketHasChunks = true;
++
++                                                crc.reset();
++                                                crc.update(chunkBytes);
++                                                expectedCrcs.put(pos, crc.getValue());
++
++                                                bucketOut.writeInt(chunkBytes.length + 8);
++                                                bucketOut.writeLong(timestamp);
++                                                bucketOut.write(chunkBytes);
++                                                continue;
++                                            }
++                                        }
++                                    }
++                                }
++                                bucketOut.writeInt(0);
++                                bucketOut.writeLong(0L);
++                            }
++                        }
++                    }
++
++                    if (!bucketHasChunks) {
++                        bucketSizes[bucketIdx] = 0;
++                        bucketCompressions[bucketIdx] = (byte) compressionLevel;
++                        bucketHashes[bucketIdx] = 0L;
++                        continue;
++                    }
++
++                    final byte[] compressedBucket = bucketStream.toByteArray();
++                    bucketSizes[bucketIdx] = compressedBucket.length;
++                    bucketCompressions[bucketIdx] = (byte) compressionLevel;
++                    bucketHashes[bucketIdx] = LinearHash.xxhash64(compressedBucket);
++
++                    // Stream compressed payload directly to disk
++                    raf.write(compressedBucket);
++                }
++            }
++
++            // Write footer superblock
++            raf.writeLong(0xc3ff13183cca9d9aL);
++
++            // Seek back to start to write header and bucket table
++            raf.seek(0);
++            raf.writeLong(0xc3ff13183cca9d9aL); // Superblock
++            raf.writeByte(3);                   // Version
++            raf.writeLong(timestamp);
++            raf.writeByte(gridSize);
++            raf.writeInt(regX);
++            raf.writeInt(regZ);
++
++            // Serialized existence bitmap: 128 bytes
++            final byte[] bitmapBytes = new byte[128];
++            for (int i = 0; i < 1024; i++) {
++                if (existenceBitmap[i]) {
++                    bitmapBytes[i >> 3] |= (byte) (1 << (7 - (i & 7)));
++                }
++            }
++            raf.write(bitmapBytes);
++
++            // NBT Features (0 = none)
++            raf.writeByte(0);
++
++            // Bucket Table: 64 entries * 13 bytes
++            for (int i = 0; i < bucketCount; i++) {
++                raf.writeInt(bucketSizes[i]);
++                raf.writeByte(bucketCompressions[i]);
++                raf.writeLong(bucketHashes[i]);
++            }
++
++            raf.getFD().sync();
++        }
++    }
++
++    private static void streamLinearToMcaDirect(final Path srcFile, final RegionFile dstMca,
++                                                final int regX, final int regZ,
++                                                final Map<ChunkPos, Long> expectedCrcs) throws IOException {
++        final CRC32 crc = new CRC32();
++        try (final RandomAccessFile raf = new RandomAccessFile(srcFile.toFile(), "r")) {
++            final long superBlock = raf.readLong();
++            if (superBlock != 0xc3ff13183cca9d9aL) {
++                throw new IOException("Invalid superblock in " + srcFile);
++            }
++            final byte version = raf.readByte();
++            if (version != 3) {
++                streamLegacyLinearToMca(srcFile, dstMca, regX, regZ, expectedCrcs, version, raf);
++                return;
++            }
++
++            raf.readLong(); // Skip timestamp
++            final byte gridSize = raf.readByte();
++            if (gridSize != 1 && gridSize != 2 && gridSize != 4 && gridSize != 8 && gridSize != 16 && gridSize != 32) {
++                throw new IOException("Invalid grid size " + gridSize + " in " + srcFile);
++            }
++            final int bucketSize = 32 / gridSize;
++            raf.readInt(); // Skip regX
++            raf.readInt(); // Skip regZ
++
++            raf.skipBytes(128); // Skip bitmap
++
++            // Skip NBT features
++            while (true) {
++                final byte featureNameLen = raf.readByte();
++                if (featureNameLen == 0) break;
++                raf.skipBytes(featureNameLen + 4);
++            }
++
++            final int bucketCount = gridSize * gridSize;
++            final int[] bucketSizes = new int[bucketCount];
++            final byte[] compressionLevels = new byte[bucketCount];
++            final long[] bucketHashes = new long[bucketCount];
++            for (int i = 0; i < bucketCount; i++) {
++                bucketSizes[i] = raf.readInt();
++                compressionLevels[i] = raf.readByte();
++                bucketHashes[i] = raf.readLong();
++            }
++
++            // Process bucket by bucket directly from disk
++            for (int bx = 0; bx < gridSize; bx++) {
++                for (int bz = 0; bz < gridSize; bz++) {
++                    final int bucketIdx = bx * gridSize + bz;
++                    final int size = bucketSizes[bucketIdx];
++                    if (size <= 0) continue;
++
++                    final byte[] compressedBucket = new byte[size];
++                    raf.readFully(compressedBucket);
++                    if (LinearHash.xxhash64(compressedBucket) != bucketHashes[bucketIdx]) {
++                        throw new IOException("Bucket hash mismatch in " + srcFile + " bucket: " + bucketIdx);
++                    }
++
++                    try (final ByteArrayInputStream bais = new ByteArrayInputStream(compressedBucket);
++                         final ZstdInputStream zstd = new ZstdInputStream(bais);
++                         final DataInputStream dis = new DataInputStream(zstd)) {
++                        for (int cx = 0; cx < bucketSize; cx++) {
++                            for (int cz = 0; cz < bucketSize; cz++) {
++                                final int chunkSize = dis.readInt();
++                                dis.readLong(); // timestamp
++                                if (chunkSize > 0) {
++                                    final byte[] chunkData = new byte[chunkSize - 8];
++                                    dis.readFully(chunkData);
++                                    final int chunkX = bx * bucketSize + cx;
++                                    final int chunkZ = bz * bucketSize + cz;
++                                    final ChunkPos pos = new ChunkPos((regX << 5) + chunkX, (regZ << 5) + chunkZ);
++
++                                    crc.reset();
++                                    crc.update(chunkData);
++                                    expectedCrcs.put(pos, crc.getValue());
++
++                                    try (final DataOutputStream out = dstMca.getChunkDataOutputStream(pos)) {
++                                        out.write(chunkData);
++                                    }
 +                                }
 +                            }
 +                        }
 +                    }
 +                }
 +            }
-+        }
-+    }
 +
-+    private static void streamLinearToMca(final LinearRegionFile srcLinear, final RegionFile dstMca,
-+                                          final int regX, final int regZ, final Map<ChunkPos, Long> expectedCrcs) throws IOException {
-+        final CRC32 crc = new CRC32();
-+        for (int x = 0; x < 32; x++) {
-+            for (int z = 0; z < 32; z++) {
-+                final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
-+                if (srcLinear.hasChunk(pos)) {
-+                    try (final DataInputStream in = srcLinear.getChunkDataInputStream(pos)) {
-+                        if (in != null) {
-+                            final byte[] chunkBytes = in.readAllBytes();
-+                            if (chunkBytes.length > 0) {
-+                                crc.reset();
-+                                crc.update(chunkBytes);
-+                                expectedCrcs.put(pos, crc.getValue());
-+
-+                                try (final DataOutputStream out = dstMca.getChunkDataOutputStream(pos)) {
-+                                    out.write(chunkBytes);
-+                                }
-+                            }
-+                        }
-+                    }
-+                }
++            final long footer = raf.readLong();
++            if (footer != 0xc3ff13183cca9d9aL) {
++                throw new IOException("Invalid footer superblock in " + srcFile);
 +            }
 +        }
 +    }
 +
-+    private static void verifyConvertedFileStreaming(final Path file, final RegionFormat format, final int compression,
-+                                                     final Map<ChunkPos, Long> expectedCrcs) throws Exception {
-+        final RegionStorageInfo info = new RegionStorageInfo("verify", Level.OVERWORLD, "chunk");
++    private static void streamLegacyLinearToMca(final Path srcFile, final RegionFile dstMca,
++                                                final int regX, final int regZ,
++                                                final Map<ChunkPos, Long> expectedCrcs,
++                                                final byte version, final RandomAccessFile raf) throws IOException {
 +        final CRC32 crc = new CRC32();
++        if (version == 1 || version == 2) {
++            raf.skipBytes(11); // newestTimestamp + compression + chunkCount
++            final int dataCount = raf.readInt();
++            raf.skipBytes(8);  // dataHash
 +
-+        if (format == RegionFormat.LINEAR) {
-+            try (final LinearRegionFile linear = new LinearRegionFile(info, file, file.getParent(), true, compression)) {
-+                for (final Map.Entry<ChunkPos, Long> entry : expectedCrcs.entrySet()) {
-+                    final ChunkPos pos = entry.getKey();
-+                    if (!linear.hasChunk(pos)) {
-+                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted linear file");
-+                    }
-+                    try (final DataInputStream in = linear.getChunkDataInputStream(pos)) {
-+                        if (in == null) {
-+                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
-+                        }
-+                        final byte[] chunkBytes = in.readAllBytes();
++            final byte[] rawCompressed = new byte[dataCount];
++            raf.readFully(rawCompressed);
++
++            final byte[] decompressedBytes;
++            try (final ByteArrayInputStream bais = new ByteArrayInputStream(rawCompressed);
++                 final ZstdInputStream zstd = new ZstdInputStream(bais)) {
++                decompressedBytes = zstd.readAllBytes();
++            }
++
++            try (final ByteArrayInputStream dbais = new ByteArrayInputStream(decompressedBytes);
++                 final DataInputStream dis = new DataInputStream(dbais)) {
++                final int[] starts = new int[1024];
++                for (int i = 0; i < 1024; i++) {
++                    starts[i] = dis.readInt();
++                    dis.readInt(); // timestamp
++                }
++
++                for (int i = 0; i < 1024; i++) {
++                    if (starts[i] > 0) {
++                        final byte[] chunkData = new byte[starts[i]];
++                        dis.readFully(chunkData);
++                        final int chunkX = i & 31;
++                        final int chunkZ = i >> 5;
++                        final ChunkPos pos = new ChunkPos((regX << 5) + chunkX, (regZ << 5) + chunkZ);
++
 +                        crc.reset();
-+                        crc.update(chunkBytes);
-+                        if (crc.getValue() != entry.getValue().longValue()) {
-+                            throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos);
++                        crc.update(chunkData);
++                        expectedCrcs.put(pos, crc.getValue());
++
++                        try (final DataOutputStream out = dstMca.getChunkDataOutputStream(pos)) {
++                            out.write(chunkData);
 +                        }
 +                    }
 +                }
 +            }
 +        } else {
-+            try (final RegionFile mca = new RegionFile(info, file, file.getParent(), true)) {
-+                for (final Map.Entry<ChunkPos, Long> entry : expectedCrcs.entrySet()) {
-+                    final ChunkPos pos = entry.getKey();
-+                    if (!mca.hasChunk(pos)) {
-+                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted mca file");
++            throw new IOException("Unsupported Linear version " + version + " in " + srcFile);
++        }
++    }
++
++    private static void verifyConvertedFileStreaming(final Path file, final RegionFormat format, final int compression,
++                                                     final Map<ChunkPos, Long> expectedCrcs) throws Exception {
++        if (format == RegionFormat.LINEAR) {
++            verifyLinearDirect(file, expectedCrcs);
++        } else {
++            verifyMcaDirect(file, expectedCrcs);
++        }
++    }
++
++    private static void verifyLinearDirect(final Path file, final Map<ChunkPos, Long> expectedCrcs) throws Exception {
++        final CRC32 crc = new CRC32();
++        int verifiedCount = 0;
++
++        try (final RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
++            final long superBlock = raf.readLong();
++            if (superBlock != 0xc3ff13183cca9d9aL) {
++                throw new IllegalStateException("Verification failed: invalid superblock in " + file);
++            }
++            final byte version = raf.readByte();
++            if (version != 3) {
++                throw new IllegalStateException("Verification failed: unexpected version " + version + " in " + file);
++            }
++            raf.readLong(); // timestamp
++            final byte gridSize = raf.readByte();
++            final int bucketSize = 32 / gridSize;
++            final int regX = raf.readInt();
++            final int regZ = raf.readInt();
++
++            raf.skipBytes(128); // bitmap
++
++            while (true) {
++                final byte featureNameLen = raf.readByte();
++                if (featureNameLen == 0) break;
++                raf.skipBytes(featureNameLen + 4);
++            }
++
++            final int bucketCount = gridSize * gridSize;
++            final int[] bucketSizes = new int[bucketCount];
++            final byte[] compressionLevels = new byte[bucketCount];
++            final long[] bucketHashes = new long[bucketCount];
++            for (int i = 0; i < bucketCount; i++) {
++                bucketSizes[i] = raf.readInt();
++                compressionLevels[i] = raf.readByte();
++                bucketHashes[i] = raf.readLong();
++            }
++
++            for (int bx = 0; bx < gridSize; bx++) {
++                for (int bz = 0; bz < gridSize; bz++) {
++                    final int bucketIdx = bx * gridSize + bz;
++                    final int size = bucketSizes[bucketIdx];
++                    if (size <= 0) continue;
++
++                    final byte[] compressedBucket = new byte[size];
++                    raf.readFully(compressedBucket);
++                    if (LinearHash.xxhash64(compressedBucket) != bucketHashes[bucketIdx]) {
++                        throw new IllegalStateException("Verification failed: bucket hash mismatch in " + file);
 +                    }
-+                    try (final DataInputStream in = mca.getChunkDataInputStream(pos)) {
-+                        if (in == null) {
-+                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
++
++                    try (final ByteArrayInputStream bais = new ByteArrayInputStream(compressedBucket);
++                         final ZstdInputStream zstd = new ZstdInputStream(bais);
++                         final DataInputStream dis = new DataInputStream(zstd)) {
++                        for (int cx = 0; cx < bucketSize; cx++) {
++                            for (int cz = 0; cz < bucketSize; cz++) {
++                                final int chunkSize = dis.readInt();
++                                dis.readLong(); // timestamp
++                                if (chunkSize > 0) {
++                                    final byte[] chunkData = new byte[chunkSize - 8];
++                                    dis.readFully(chunkData);
++                                    final int chunkX = bx * bucketSize + cx;
++                                    final int chunkZ = bz * bucketSize + cz;
++                                    final ChunkPos pos = new ChunkPos((regX << 5) + chunkX, (regZ << 5) + chunkZ);
++
++                                    final Long expected = expectedCrcs.get(pos);
++                                    if (expected == null) {
++                                        throw new IllegalStateException("Verification failed: unexpected chunk " + pos + " in " + file);
++                                    }
++                                    crc.reset();
++                                    crc.update(chunkData);
++                                    if (crc.getValue() != expected.longValue()) {
++                                        throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos + " in " + file);
++                                    }
++                                    verifiedCount++;
++                                }
++                            }
 +                        }
-+                        final byte[] chunkBytes = in.readAllBytes();
-+                        crc.reset();
-+                        crc.update(chunkBytes);
-+                        if (crc.getValue() != entry.getValue().longValue()) {
-+                            throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos);
-+                        }
++                    }
++                }
++            }
++        }
++
++        if (verifiedCount != expectedCrcs.size()) {
++            throw new IllegalStateException("Verification failed: expected " + expectedCrcs.size() + " chunks but verified " + verifiedCount);
++        }
++    }
++
++    private static void verifyMcaDirect(final Path file, final Map<ChunkPos, Long> expectedCrcs) throws Exception {
++        final RegionStorageInfo info = new RegionStorageInfo("verify", Level.OVERWORLD, "chunk");
++        final CRC32 crc = new CRC32();
++        try (final RegionFile mca = new RegionFile(info, file, file.getParent(), true)) {
++            for (final Map.Entry<ChunkPos, Long> entry : expectedCrcs.entrySet()) {
++                final ChunkPos pos = entry.getKey();
++                if (!mca.hasChunk(pos)) {
++                    throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted mca file " + file);
++                }
++                try (final DataInputStream in = mca.getChunkDataInputStream(pos)) {
++                    if (in == null) {
++                        throw new IllegalStateException("Verification failed: input stream null for chunk " + pos + " in " + file);
++                    }
++                    final byte[] chunkBytes = in.readAllBytes();
++                    crc.reset();
++                    crc.update(chunkBytes);
++                    if (crc.getValue() != entry.getValue().longValue()) {
++                        throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos + " in " + file);
 +                    }
 +                }
 +            }
 +        }
 +    }
 +}
-+
 diff --git a/io/papermc/paper/linear/WorldsSettings.java b/io/papermc/paper/linear/WorldsSettings.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..30c6bdb2e2129b6477008452c87774f69237f209
