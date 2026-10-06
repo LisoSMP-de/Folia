@@ -177,7 +177,7 @@ index 0000000000000000000000000000000000000000..8134a756d41da5e939e3f7f1f8a9527d
 \ No newline at end of file
 diff --git a/io/papermc/paper/linear/LinearRegionFile.java b/io/papermc/paper/linear/LinearRegionFile.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000
+index 0000000000000000000000000000000000000000..fd15e14d2a4a42e4541e667fc67642f48fa3423a
 --- /dev/null
 +++ b/io/papermc/paper/linear/LinearRegionFile.java
 @@ -0,0 +1,628 @@
@@ -940,7 +940,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000
 --- /dev/null
 +++ b/io/papermc/paper/linear/WorldFormatConverter.java
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,706 @@
 +package io.papermc.paper.linear;
 +
 +import com.mojang.logging.LogUtils;
@@ -964,6 +964,7 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +import java.io.IOException;
 +import java.nio.file.*;
 +import java.nio.file.attribute.BasicFileAttributes;
++import java.util.zip.CRC32;
 +import java.time.LocalDateTime;
 +import java.time.format.DateTimeFormatter;
 +import java.util.*;
@@ -1500,73 +1501,27 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +        } catch (final IOException ignored) {}
 +
 +        try {
-+            // Read all chunks from source file
-+            final Map<ChunkPos, CompoundTag> loadedChunks = new HashMap<>();
 +            final RegionStorageInfo info = new RegionStorageInfo("conversion", Level.OVERWORLD, "chunk");
-+
-+            if (srcName.endsWith(".mca")) {
-+                try (final RegionFile mca = new RegionFile(info, srcFile, srcFile.getParent(), true)) {
-+                    for (int x = 0; x < 32; x++) {
-+                        for (int z = 0; z < 32; z++) {
-+                            final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
-+                            if (mca.hasChunk(pos)) {
-+                                try (final DataInputStream in = mca.getChunkDataInputStream(pos)) {
-+                                    if (in != null) {
-+                                        final CompoundTag tag = NbtIo.read(in);
-+                                        if (tag != null) {
-+                                            loadedChunks.put(pos, tag);
-+                                        }
-+                                    }
-+                                }
-+                            }
-+                        }
-+                    }
-+                }
-+            } else if (srcName.endsWith(".linear")) {
-+                try (final LinearRegionFile linear = new LinearRegionFile(info, srcFile, srcFile.getParent(), true, targetCompression)) {
-+                    for (int x = 0; x < 32; x++) {
-+                        for (int z = 0; z < 32; z++) {
-+                            final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
-+                            if (linear.hasChunk(pos)) {
-+                                try (final DataInputStream in = linear.getChunkDataInputStream(pos)) {
-+                                    if (in != null) {
-+                                        final CompoundTag tag = NbtIo.read(in);
-+                                        if (tag != null) {
-+                                            loadedChunks.put(pos, tag);
-+                                        }
-+                                    }
-+                                }
-+                            }
-+                        }
-+                    }
-+                }
-+            }
-+
-+            // Write all loaded chunks into temp destination file
++            final Map<ChunkPos, Long> expectedCrcs = new HashMap<>();
 +            Files.deleteIfExists(tempDstFile);
 +
-+            if (targetFormat == RegionFormat.LINEAR) {
-+                try (final LinearRegionFile dstLinear = new LinearRegionFile(info, tempDstFile, tempDstFile.getParent(), true, targetCompression)) {
-+                    for (final Map.Entry<ChunkPos, CompoundTag> entry : loadedChunks.entrySet()) {
-+                        try (final DataOutputStream out = dstLinear.getChunkDataOutputStream(entry.getKey())) {
-+                            NbtIo.write(entry.getValue(), out);
-+                        }
-+                    }
-+                    dstLinear.flush();
++            if (srcName.endsWith(".mca") && targetFormat == RegionFormat.LINEAR) {
++                try (final RegionFile srcMca = new RegionFile(info, srcFile, srcFile.getParent(), true);
++                     final LinearRegionFile dstLinear = new LinearRegionFile(info, tempDstFile, tempDstFile.getParent(), true, targetCompression)) {
++                    streamMcaToLinear(srcMca, dstLinear, regX, regZ, expectedCrcs);
 +                }
-+            } else {
-+                try (final RegionFile dstMca = new RegionFile(info, tempDstFile, tempDstFile.getParent(), true)) {
-+                    for (final Map.Entry<ChunkPos, CompoundTag> entry : loadedChunks.entrySet()) {
-+                        try (final DataOutputStream out = dstMca.getChunkDataOutputStream(entry.getKey())) {
-+                            NbtIo.write(entry.getValue(), out);
-+                        }
-+                    }
++            } else if (srcName.endsWith(".linear") && targetFormat == RegionFormat.MCA) {
++                try (final LinearRegionFile srcLinear = new LinearRegionFile(info, srcFile, srcFile.getParent(), true, targetCompression);
++                     final RegionFile dstMca = new RegionFile(info, tempDstFile, tempDstFile.getParent(), true)) {
++                    streamLinearToMca(srcLinear, dstMca, regX, regZ, expectedCrcs);
 +                    dstMca.flush();
 +                }
++            } else {
++                return false;
 +            }
 +
-+            // Verification: re-read temp file and compare decoded NBT tags
-+            verifyConvertedFile(tempDstFile, targetFormat, targetCompression, loadedChunks, regX, regZ);
++            // Verification: re-read temp file chunk-by-chunk and compare streaming checksums without heap accumulation
++            verifyConvertedFileStreaming(tempDstFile, targetFormat, targetCompression, expectedCrcs);
 +
 +            // Verified! Atomic replace (or fallback copy/delete if needed)
 +            if (Files.exists(tempDstFile)) {
@@ -1591,13 +1546,66 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +        }
 +    }
 +
-+    private static void verifyConvertedFile(final Path file, final RegionFormat format, final int compression,
-+                                            final Map<ChunkPos, CompoundTag> originalChunks, final int regX, final int regZ) throws Exception {
++    private static void streamMcaToLinear(final RegionFile srcMca, final LinearRegionFile dstLinear,
++                                          final int regX, final int regZ, final Map<ChunkPos, Long> expectedCrcs) throws IOException {
++        final CRC32 crc = new CRC32();
++        for (int x = 0; x < 32; x++) {
++            for (int z = 0; z < 32; z++) {
++                final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
++                if (srcMca.hasChunk(pos)) {
++                    try (final DataInputStream in = srcMca.getChunkDataInputStream(pos)) {
++                        if (in != null) {
++                            final byte[] chunkBytes = in.readAllBytes();
++                            if (chunkBytes.length > 0) {
++                                crc.reset();
++                                crc.update(chunkBytes);
++                                expectedCrcs.put(pos, crc.getValue());
++
++                                try (final DataOutputStream out = dstLinear.getChunkDataOutputStream(pos)) {
++                                    out.write(chunkBytes);
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    private static void streamLinearToMca(final LinearRegionFile srcLinear, final RegionFile dstMca,
++                                          final int regX, final int regZ, final Map<ChunkPos, Long> expectedCrcs) throws IOException {
++        final CRC32 crc = new CRC32();
++        for (int x = 0; x < 32; x++) {
++            for (int z = 0; z < 32; z++) {
++                final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
++                if (srcLinear.hasChunk(pos)) {
++                    try (final DataInputStream in = srcLinear.getChunkDataInputStream(pos)) {
++                        if (in != null) {
++                            final byte[] chunkBytes = in.readAllBytes();
++                            if (chunkBytes.length > 0) {
++                                crc.reset();
++                                crc.update(chunkBytes);
++                                expectedCrcs.put(pos, crc.getValue());
++
++                                try (final DataOutputStream out = dstMca.getChunkDataOutputStream(pos)) {
++                                    out.write(chunkBytes);
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    private static void verifyConvertedFileStreaming(final Path file, final RegionFormat format, final int compression,
++                                                     final Map<ChunkPos, Long> expectedCrcs) throws Exception {
 +        final RegionStorageInfo info = new RegionStorageInfo("verify", Level.OVERWORLD, "chunk");
++        final CRC32 crc = new CRC32();
 +
 +        if (format == RegionFormat.LINEAR) {
 +            try (final LinearRegionFile linear = new LinearRegionFile(info, file, file.getParent(), true, compression)) {
-+                for (final Map.Entry<ChunkPos, CompoundTag> entry : originalChunks.entrySet()) {
++                for (final Map.Entry<ChunkPos, Long> entry : expectedCrcs.entrySet()) {
 +                    final ChunkPos pos = entry.getKey();
 +                    if (!linear.hasChunk(pos)) {
 +                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted linear file");
@@ -1606,16 +1614,18 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +                        if (in == null) {
 +                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
 +                        }
-+                        final CompoundTag readTag = NbtIo.read(in);
-+                        if (!entry.getValue().equals(readTag)) {
-+                            throw new IllegalStateException("Verification failed: NBT content mismatch for chunk " + pos);
++                        final byte[] chunkBytes = in.readAllBytes();
++                        crc.reset();
++                        crc.update(chunkBytes);
++                        if (crc.getValue() != entry.getValue().longValue()) {
++                            throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos);
 +                        }
 +                    }
 +                }
 +            }
 +        } else {
 +            try (final RegionFile mca = new RegionFile(info, file, file.getParent(), true)) {
-+                for (final Map.Entry<ChunkPos, CompoundTag> entry : originalChunks.entrySet()) {
++                for (final Map.Entry<ChunkPos, Long> entry : expectedCrcs.entrySet()) {
 +                    final ChunkPos pos = entry.getKey();
 +                    if (!mca.hasChunk(pos)) {
 +                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted mca file");
@@ -1624,9 +1634,11 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
 +                        if (in == null) {
 +                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
 +                        }
-+                        final CompoundTag readTag = NbtIo.read(in);
-+                        if (!entry.getValue().equals(readTag)) {
-+                            throw new IllegalStateException("Verification failed: NBT content mismatch for chunk " + pos);
++                        final byte[] chunkBytes = in.readAllBytes();
++                        crc.reset();
++                        crc.update(chunkBytes);
++                        if (crc.getValue() != entry.getValue().longValue()) {
++                            throw new IllegalStateException("Verification failed: CRC mismatch for chunk " + pos);
 +                        }
 +                    }
 +                }
