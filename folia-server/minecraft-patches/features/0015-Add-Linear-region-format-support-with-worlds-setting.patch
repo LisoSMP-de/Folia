@@ -177,10 +177,10 @@ index 0000000000000000000000000000000000000000..8134a756d41da5e939e3f7f1f8a9527d
 \ No newline at end of file
 diff --git a/io/papermc/paper/linear/LinearRegionFile.java b/io/papermc/paper/linear/LinearRegionFile.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..62fabc5719e58870b55970939eb566f9c153c65c
+index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000
 --- /dev/null
 +++ b/io/papermc/paper/linear/LinearRegionFile.java
-@@ -0,0 +1,622 @@
+@@ -0,0 +1,628 @@
 +package io.papermc.paper.linear;
 +
 +import ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO;
@@ -606,7 +606,13 @@ index 0000000000000000000000000000000000000000..62fabc5719e58870b55970939eb566f9
 +        dataStream.close();
 +        fileStream.close();
 +
-+        Files.move(tempFile.toPath(), this.regionFile, StandardCopyOption.REPLACE_EXISTING);
++        if (!tempFile.toPath().equals(this.regionFile)) {
++            try {
++                Files.move(tempFile.toPath(), this.regionFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
++            } catch (final Exception ignored) {
++                Files.move(tempFile.toPath(), this.regionFile, StandardCopyOption.REPLACE_EXISTING);
++            }
++        }
 +    }
 +
 +    private void writeNBTFeatures(final DataOutputStream dataStream) throws IOException {
@@ -803,7 +809,6 @@ index 0000000000000000000000000000000000000000..62fabc5719e58870b55970939eb566f9
 +        }
 +    }
 +}
-\ No newline at end of file
 diff --git a/io/papermc/paper/linear/LinearRegionFileAdapter.java b/io/papermc/paper/linear/LinearRegionFileAdapter.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..5480b82e9a0966ab70931bd5fcc44a09ab5c1c66
@@ -932,10 +937,10 @@ index 0000000000000000000000000000000000000000..22e1715319ca9f32f7f61a5dfc11273f
 \ No newline at end of file
 diff --git a/io/papermc/paper/linear/WorldFormatConverter.java b/io/papermc/paper/linear/WorldFormatConverter.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77bb310914c
+index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000
 --- /dev/null
 +++ b/io/papermc/paper/linear/WorldFormatConverter.java
-@@ -0,0 +1,563 @@
+@@ -0,0 +1,694 @@
 +package io.papermc.paper.linear;
 +
 +import com.mojang.logging.LogUtils;
@@ -963,6 +968,11 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +import java.time.format.DateTimeFormatter;
 +import java.util.*;
 +import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.TimeUnit;
 +import java.util.regex.Matcher;
 +import java.util.regex.Pattern;
 +import java.util.stream.Stream;
@@ -1217,17 +1227,18 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +        warning.append("The following worlds and folders will be converted:\n");
 +
 +        final Set<Path> worldsToBackup = new LinkedHashSet<>();
-+        int totalFiles = 0;
++        int calculatedTotalFiles = 0;
 +        int maxCountdown = 0;
 +
 +        for (final ConversionTask task : tasks) {
 +            warning.append(String.format(" - World: %s | Folder: %s | %s -> %s (%d files)\n",
 +                task.worldName(), task.subFolder().getFileName(), task.sourceFormat(), task.targetFormat(), task.filesToConvert().size()));
 +            worldsToBackup.add(task.worldDir());
-+            totalFiles += task.filesToConvert().size();
++            calculatedTotalFiles += task.filesToConvert().size();
 +            maxCountdown = Math.max(maxCountdown, task.setting().conversion().countdownSeconds());
 +        }
 +
++        final int totalFiles = calculatedTotalFiles;
 +        warning.append(String.format("Total files to convert: %d\n", totalFiles));
 +
 +        final boolean anyBackup = tasks.stream().anyMatch(t -> t.setting().conversion().backupEnabled());
@@ -1247,36 +1258,84 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +        }
 +
 +        // Perform backups
++        final Map<Path, Path> worldBackupPaths = new HashMap<>();
 +        for (final Path worldDir : worldsToBackup) {
 +            final ConversionTask repTask = tasks.stream().filter(t -> t.worldDir().equals(worldDir)).findFirst().orElse(null);
 +            if (repTask != null && repTask.setting().conversion().backupEnabled()) {
-+                performBackup(worldDir, repTask.setting().conversion().backupDirectory());
++                final Path backupTarget = performBackup(worldDir, repTask.setting().conversion().backupDirectory());
++                if (backupTarget != null) {
++                    worldBackupPaths.put(worldDir, backupTarget);
++                }
 +            }
 +        }
 +
 +        // Perform conversions
-+        LOGGER.info("Starting format conversion of {} files...", totalFiles);
++        final int threadCount = Math.max(1, Runtime.getRuntime().availableProcessors());
++        LOGGER.info("Starting format conversion of {} files across {} threads...", totalFiles, threadCount);
 +        final long startMs = System.currentTimeMillis();
-+        int convertedFiles = 0;
 +
-+        for (final ConversionTask task : tasks) {
-+            LOGGER.info("Converting {}/{} ({} -> {})...", task.worldName(), task.subFolder().getFileName(), task.sourceFormat(), task.targetFormat());
-+            final Path stateFile = task.subFolder().resolve(CONVERSION_STATE_FILE);
++        final ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
++            final Thread t = new Thread(r, "World-Format-Converter-Worker");
++            t.setDaemon(true);
++            return t;
++        });
 +
-+            for (final Path srcFile : task.filesToConvert()) {
-+                convertSingleFile(srcFile, task.targetFormat(), task.targetCompression(), stateFile);
-+                convertedFiles++;
-+                LOGGER.info("Progress: {}/{} files converted ({})", convertedFiles, totalFiles, srcFile.getFileName());
++        final AtomicInteger convertedCounter = new AtomicInteger(0);
++        final AtomicInteger failedCounter = new AtomicInteger(0);
++
++        try {
++            for (final ConversionTask task : tasks) {
++                LOGGER.info("Converting {}/{} ({} -> {})...", task.worldName(), task.subFolder().getFileName(), task.sourceFormat(), task.targetFormat());
++                final Path stateFile = task.subFolder().resolve(CONVERSION_STATE_FILE);
++                final Path knownBackupPath = worldBackupPaths.get(task.worldDir());
++                final String configBackupDir = task.setting().conversion().backupDirectory();
++
++                final List<Future<?>> futures = new ArrayList<>();
++                for (final Path srcFile : task.filesToConvert()) {
++                    futures.add(executor.submit(() -> {
++                        final boolean success = convertWithBackupFallback(srcFile, task.targetFormat(), task.targetCompression(), stateFile, task.worldDir(), knownBackupPath, configBackupDir);
++                        if (success) {
++                            final int current = convertedCounter.incrementAndGet();
++                            LOGGER.info("Progress: {}/{} files converted ({})", current, totalFiles, srcFile.getFileName());
++                        } else {
++                            failedCounter.incrementAndGet();
++                        }
++                    }));
++                }
++
++                for (final Future<?> future : futures) {
++                    try {
++                        future.get();
++                    } catch (final Exception e) {
++                        LOGGER.error("Unexpected error waiting for conversion task", e);
++                    }
++                }
++
++                try {
++                    Files.deleteIfExists(stateFile);
++                } catch (final IOException ignored) {}
 +            }
-+
++        } finally {
++            executor.shutdown();
 +            try {
-+                Files.deleteIfExists(stateFile);
-+            } catch (final IOException ignored) {}
++                if (!executor.awaitTermination(1, TimeUnit.HOURS)) {
++                    executor.shutdownNow();
++                }
++            } catch (final InterruptedException e) {
++                executor.shutdownNow();
++                Thread.currentThread().interrupt();
++            }
 +        }
 +
++        final int convertedFiles = convertedCounter.get();
++        final int failedFiles = failedCounter.get();
 +        final long elapsed = System.currentTimeMillis() - startMs;
 +        LOGGER.info("======================================================================");
-+        LOGGER.info("Format conversion completed successfully: {} files in {} ms.", convertedFiles, elapsed);
++        if (failedFiles > 0) {
++            LOGGER.warn("Format conversion finished with {} errors (skipped/continued): {}/{} files converted successfully in {} ms.", failedFiles, convertedFiles, totalFiles, elapsed);
++        } else {
++            LOGGER.info("Format conversion completed successfully: {} files in {} ms.", convertedFiles, elapsed);
++        }
 +        LOGGER.info("======================================================================");
 +    }
 +
@@ -1312,7 +1371,7 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +        }
 +    }
 +
-+    private static void performBackup(final Path worldDir, final String backupDirPath) {
++    private static Path performBackup(final Path worldDir, final String backupDirPath) {
 +        final String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
 +        final String worldName = worldDir.getFileName().toString();
 +        final Path targetBase = Paths.get(backupDirPath);
@@ -1348,24 +1407,92 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +            });
 +
 +            LOGGER.info("Backup of '{}' completed successfully.", worldName);
++            return backupTarget;
 +        } catch (final IOException ex) {
 +            LOGGER.error("Backup failed for world '{}'. Conversion halted to prevent data loss!", worldName, ex);
 +            throw new RuntimeException("Backup failed: " + ex.getMessage(), ex);
 +        }
 +    }
 +
-+    private static void convertSingleFile(final Path srcFile, final RegionFormat targetFormat, final int targetCompression, final Path stateFile) {
++    private static boolean convertWithBackupFallback(final Path srcFile, final RegionFormat targetFormat, final int targetCompression,
++                                                     final Path stateFile, final Path worldDir, final Path knownBackupPath, final String configBackupDir) {
++        if (convertSingleFile(srcFile, targetFormat, targetCompression, stateFile, null)) {
++            return true;
++        }
++
++        // Conversion failed for srcFile. Try locating candidate in backup folder!
++        final Path backupCandidate = findBackupFile(srcFile, worldDir, knownBackupPath, configBackupDir);
++        if (backupCandidate != null && Files.exists(backupCandidate)) {
++            LOGGER.warn("Retrying conversion of {} using backup copy from {}...", srcFile.getFileName(), backupCandidate.toAbsolutePath());
++            // Target path is where srcFile was meant to go (srcFile's parent)
++            final boolean retrySuccess = convertSingleFile(backupCandidate, targetFormat, targetCompression, stateFile, srcFile.getParent());
++            if (retrySuccess) {
++                LOGGER.info("Successfully recovered and converted {} from backup!", srcFile.getFileName());
++                return true;
++            } else {
++                LOGGER.error("Conversion of backup copy {} also failed.", backupCandidate.toAbsolutePath());
++            }
++        } else {
++            LOGGER.warn("No backup copy found for {} to retry conversion.", srcFile.getFileName());
++        }
++
++        return false;
++    }
++
++    private static Path findBackupFile(final Path srcFile, final Path worldDir, final Path knownBackupPath, final String configBackupDir) {
++        try {
++            final Path relPath = worldDir.relativize(srcFile);
++
++            // 1. Check known backup path created during this run
++            if (knownBackupPath != null) {
++                final Path candidate = knownBackupPath.resolve(relPath);
++                if (Files.exists(candidate)) {
++                    return candidate;
++                }
++            }
++
++            // 2. Search configured backup directory for latest matching backup
++            final Path backupBase = Paths.get(configBackupDir);
++            if (Files.isDirectory(backupBase)) {
++                final String worldPrefix = worldDir.getFileName().toString() + "_";
++                final List<Path> matchingBackupDirs = new ArrayList<>();
++                try (final Stream<Path> stream = Files.list(backupBase)) {
++                    stream.filter(Files::isDirectory)
++                          .filter(p -> p.getFileName().toString().startsWith(worldPrefix))
++                          .sorted(Comparator.comparing(Path::getFileName).reversed())
++                          .forEach(matchingBackupDirs::add);
++                }
++
++                for (final Path dir : matchingBackupDirs) {
++                    final Path candidate = dir.resolve(relPath);
++                    if (Files.exists(candidate)) {
++                        return candidate;
++                    }
++                }
++            }
++        } catch (final Exception e) {
++            LOGGER.debug("Error searching for backup copy of {}: {}", srcFile.getFileName(), e.getMessage());
++        }
++        return null;
++    }
++
++    private static boolean convertSingleFile(final Path srcFile, final RegionFormat targetFormat, final int targetCompression, final Path stateFile) {
++        return convertSingleFile(srcFile, targetFormat, targetCompression, stateFile, null);
++    }
++
++    private static boolean convertSingleFile(final Path srcFile, final RegionFormat targetFormat, final int targetCompression, final Path stateFile, final Path targetDirectory) {
 +        final String srcName = srcFile.getFileName().toString();
 +        final Matcher matcher = REGION_FILE_PATTERN.matcher(srcName);
 +        if (!matcher.matches()) {
-+            return;
++            return true;
 +        }
 +
 +        final int regX = Integer.parseInt(matcher.group(1));
 +        final int regZ = Integer.parseInt(matcher.group(2));
 +        final String targetName = "r." + regX + "." + regZ + targetFormat.extension();
-+        final Path dstFile = srcFile.resolveSibling(targetName);
-+        final Path tempDstFile = srcFile.resolveSibling(targetName + ".tmp");
++        final Path destFolder = targetDirectory != null ? targetDirectory : srcFile.getParent();
++        final Path dstFile = destFolder.resolve(targetName);
++        final Path tempDstFile = destFolder.resolve(targetName + ".tmp");
 +
 +        // Write state file before processing
 +        try {
@@ -1441,18 +1568,26 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +            // Verification: re-read temp file and compare decoded NBT tags
 +            verifyConvertedFile(tempDstFile, targetFormat, targetCompression, loadedChunks, regX, regZ);
 +
-+            // Verified! Atomic replace
-+            Files.move(tempDstFile, dstFile, StandardCopyOption.REPLACE_EXISTING);
++            // Verified! Atomic replace (or fallback copy/delete if needed)
++            if (Files.exists(tempDstFile)) {
++                try {
++                    Files.move(tempDstFile, dstFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
++                } catch (final Exception e) {
++                    Files.move(tempDstFile, dstFile, StandardCopyOption.REPLACE_EXISTING);
++                }
++            }
 +
-+            // Only delete source file after dstFile is safely placed
-+            Files.deleteIfExists(srcFile);
-+
++            // Only delete source file after dstFile is safely placed (do not delete if converting from backup!)
++            if (targetDirectory == null) {
++                Files.deleteIfExists(srcFile);
++            }
++            return true;
 +        } catch (final Exception ex) {
-+            LOGGER.error("Failed to convert file {}", srcFile.toAbsolutePath(), ex);
++            LOGGER.warn("Failed to convert file {} ({}), skipping and continuing conversion pipeline.", srcFile.toAbsolutePath(), ex.getMessage());
 +            try {
 +                Files.deleteIfExists(tempDstFile);
 +            } catch (final IOException ignored) {}
-+            throw new RuntimeException("Conversion failed for file " + srcFile.getFileName() + ": " + ex.getMessage(), ex);
++            return false;
 +        }
 +    }
 +
@@ -1499,6 +1634,7 @@ index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77b
 +        }
 +    }
 +}
++
 diff --git a/io/papermc/paper/linear/WorldsSettings.java b/io/papermc/paper/linear/WorldsSettings.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..30c6bdb2e2129b6477008452c87774f69237f209
@@ -1839,7 +1975,7 @@ index 3de7fd2b084c38e72d7a6bc416880a881f514ad3..8ae2be8c1939418e8e04c95e4275a451
          this(info, path, externalFileDir, RegionFileVersion.getSelected(), sync);
      }
 diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-index 63b40c420030d935bb81a219fb33defe0946e21f..2a48f57e02434e3d67e44e6f35b6d270e976df81 100644
+index 63b40c420030d935bb81a219fb33defe0946e21f..aa095e825ca0573cdaf2fb60d0afbd8659f36296 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 @@ -30,7 +30,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
@@ -1882,7 +2018,7 @@ index 63b40c420030d935bb81a219fb33defe0946e21f..2a48f57e02434e3d67e44e6f35b6d270
  
          this.regionCache.putAndMoveToFirst(key, ret);
  
-@@ -277,6 +288,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -269,6 +280,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      public RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) {
          this.folder = folder;
          this.sync = sync;
