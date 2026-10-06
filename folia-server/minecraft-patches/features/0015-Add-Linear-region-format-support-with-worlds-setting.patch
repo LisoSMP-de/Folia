@@ -1,0 +1,1904 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 11:47:17 +0200
+Subject: [PATCH] Add Linear region format support with worlds-settings.yml and
+ auto-conversion
+
+
+diff --git a/io/papermc/paper/linear/IRegionFile.java b/io/papermc/paper/linear/IRegionFile.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..5230d3206a27dae71b8f7be4376c1f15bf00bbb9
+--- /dev/null
++++ b/io/papermc/paper/linear/IRegionFile.java
+@@ -0,0 +1,41 @@
++package io.papermc.paper.linear;
++
++import ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile;
++import net.minecraft.nbt.CompoundTag;
++import net.minecraft.world.level.ChunkPos;
++
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
++import java.io.IOException;
++import java.nio.ByteBuffer;
++import java.nio.file.Path;
++
++public interface IRegionFile extends ChunkSystemRegionFile, AutoCloseable {
++    Path getPath();
++
++    DataInputStream getChunkDataInputStream(ChunkPos pos) throws IOException;
++
++    DataOutputStream getChunkDataOutputStream(ChunkPos pos) throws IOException;
++
++    void flush() throws IOException;
++
++    void clear(ChunkPos pos) throws IOException;
++
++    boolean hasChunk(ChunkPos pos);
++
++    void close() throws IOException;
++
++    void write(ChunkPos pos, ByteBuffer buf) throws IOException;
++
++    CompoundTag getOversizedData(int x, int z) throws IOException;
++
++    boolean isOversized(int x, int z);
++
++    boolean recalculateHeader() throws IOException;
++
++    void setOversized(int x, int z, boolean oversized) throws IOException;
++
++    default int getRecalculateCount() {
++        return 0;
++    }
++}
+\ No newline at end of file
+diff --git a/io/papermc/paper/linear/LinearHash.java b/io/papermc/paper/linear/LinearHash.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8134a756d41da5e939e3f7f1f8a9527d61bfda4b
+--- /dev/null
++++ b/io/papermc/paper/linear/LinearHash.java
+@@ -0,0 +1,115 @@
++package io.papermc.paper.linear;
++
++/**
++ * Pure Java implementation of xxHash64 (seed 0) matching net.openhft LongHashFunction.xx().hashBytes(byte[]).
++ */
++public final class LinearHash {
++    private static final long PRIME64_1 = 0x9E3779B185EBCA87L;
++    private static final long PRIME64_2 = 0xC2B2AE3D27D4EB4FL;
++    private static final long PRIME64_3 = 0x165667B19E3779F9L;
++    private static final long PRIME64_4 = 0x85EBCA77C2B2AE63L;
++    private static final long PRIME64_5 = 0x27D4EB2F165667C5L;
++
++    private LinearHash() {}
++
++    private static long round(long acc, long input) {
++        acc += input * PRIME64_2;
++        acc = Long.rotateLeft(acc, 31);
++        acc *= PRIME64_1;
++        return acc;
++    }
++
++    private static long mergeRound(long acc, long val) {
++        val = round(0, val);
++        acc ^= val;
++        acc = acc * PRIME64_1 + PRIME64_4;
++        return acc;
++    }
++
++    private static long getLongLE(byte[] input, int offset) {
++        return (((long) input[offset] & 0xFF)) |
++               (((long) input[offset + 1] & 0xFF) << 8) |
++               (((long) input[offset + 2] & 0xFF) << 16) |
++               (((long) input[offset + 3] & 0xFF) << 24) |
++               (((long) input[offset + 4] & 0xFF) << 32) |
++               (((long) input[offset + 5] & 0xFF) << 40) |
++               (((long) input[offset + 6] & 0xFF) << 48) |
++               (((long) input[offset + 7] & 0xFF) << 56);
++    }
++
++    private static int getIntLE(byte[] input, int offset) {
++        return ((input[offset] & 0xFF)) |
++               ((input[offset + 1] & 0xFF) << 8) |
++               ((input[offset + 2] & 0xFF) << 16) |
++               ((input[offset + 3] & 0xFF) << 24);
++    }
++
++    public static long xxhash64(byte[] input, int offset, int length, long seed) {
++        long hash;
++        int remaining = length;
++        int off = offset;
++
++        if (remaining >= 32) {
++            long v1 = seed + PRIME64_1 + PRIME64_2;
++            long v2 = seed + PRIME64_2;
++            long v3 = seed + 0;
++            long v4 = seed - PRIME64_1;
++
++            do {
++                v1 = round(v1, getLongLE(input, off));
++                off += 8;
++                v2 = round(v2, getLongLE(input, off));
++                off += 8;
++                v3 = round(v3, getLongLE(input, off));
++                off += 8;
++                v4 = round(v4, getLongLE(input, off));
++                off += 8;
++                remaining -= 32;
++            } while (remaining >= 32);
++
++            hash = Long.rotateLeft(v1, 1) + Long.rotateLeft(v2, 7) + Long.rotateLeft(v3, 12) + Long.rotateLeft(v4, 18);
++            hash = mergeRound(hash, v1);
++            hash = mergeRound(hash, v2);
++            hash = mergeRound(hash, v3);
++            hash = mergeRound(hash, v4);
++        } else {
++            hash = seed + PRIME64_5;
++        }
++
++        hash += (long) length;
++
++        while (remaining >= 8) {
++            long k1 = round(0, getLongLE(input, off));
++            hash ^= k1;
++            hash = Long.rotateLeft(hash, 27) * PRIME64_1 + PRIME64_4;
++            off += 8;
++            remaining -= 8;
++        }
++
++        if (remaining >= 4) {
++            hash ^= ((long) getIntLE(input, off) & 0xFFFFFFFFL) * PRIME64_1;
++            hash = Long.rotateLeft(hash, 23) * PRIME64_2 + PRIME64_3;
++            off += 4;
++            remaining -= 4;
++        }
++
++        while (remaining > 0) {
++            hash ^= ((long) input[off] & 0xFF) * PRIME64_5;
++            hash = Long.rotateLeft(hash, 11) * PRIME64_1;
++            off++;
++            remaining--;
++        }
++
++        hash ^= hash >>> 33;
++        hash *= PRIME64_2;
++        hash ^= hash >>> 29;
++        hash *= PRIME64_3;
++        hash ^= hash >>> 32;
++
++        return hash;
++    }
++
++    public static long xxhash64(byte[] input) {
++        return xxhash64(input, 0, input.length, 0);
++    }
++}
+\ No newline at end of file
+diff --git a/io/papermc/paper/linear/LinearRegionFile.java b/io/papermc/paper/linear/LinearRegionFile.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..62fabc5719e58870b55970939eb566f9c153c65c
+--- /dev/null
++++ b/io/papermc/paper/linear/LinearRegionFile.java
+@@ -0,0 +1,622 @@
++package io.papermc.paper.linear;
++
++import ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO;
++import com.github.luben.zstd.ZstdInputStream;
++import com.github.luben.zstd.ZstdOutputStream;
++import com.mojang.logging.LogUtils;
++import net.jpountz.lz4.LZ4Compressor;
++import net.jpountz.lz4.LZ4Factory;
++import net.jpountz.lz4.LZ4FastDecompressor;
++import net.minecraft.nbt.CompoundTag;
++import net.minecraft.world.level.ChunkPos;
++import net.minecraft.world.level.chunk.storage.RegionFileVersion;
++import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
++import org.jspecify.annotations.Nullable;
++import org.slf4j.Logger;
++
++import java.io.*;
++import java.nio.ByteBuffer;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardCopyOption;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.locks.LockSupport;
++import java.util.concurrent.locks.ReentrantLock;
++
++/**
++ * Linear Region File implementation (Linear v2 specification).
++ * Uses Zstandard bucket compression and LZ4 in-memory chunk cache.
++ */
++public class LinearRegionFile implements IRegionFile {
++    private static final long SUPERBLOCK = 0xc3ff13183cca9d9aL;
++    private static final byte VERSION = 3;
++    private static final Logger LOGGER = LogUtils.getLogger();
++
++    public static final int SAVE_THREAD_MAX_COUNT = 6;
++    public static final int SAVE_DELAY_MS = 100;
++    public static final boolean USE_VIRTUAL_THREAD = true;
++    private static final Object saveLock = new Object();
++    private static int activeSaveThreads = 0;
++
++    private byte[][] bucketBuffers;
++    private final byte[][] buffer = new byte[1024][];
++    private final int[] bufferUncompressedSize = new int[1024];
++
++    private final long[] chunkTimestamps = new long[1024];
++    private final Object markedToSaveLock = new Object();
++
++    private final LZ4Compressor compressor;
++    private final LZ4FastDecompressor decompressor;
++
++    private boolean markedToSave = false;
++    private volatile boolean close = false;
++
++    public final ReentrantLock fileLock = new ReentrantLock(true);
++    public final Path regionFile;
++
++    private final int compressionLevel;
++    private int gridSize = 8;
++    private int bucketSize = 4;
++    private final Thread bindThread;
++    private boolean regionFileOpen = false;
++
++    public LinearRegionFile(final RegionStorageInfo storageKey, final Path path, final Path directory, final boolean dsync, final int compressionLevel) throws IOException {
++        this(storageKey, path, directory, RegionFileVersion.getSelected(), dsync, compressionLevel);
++    }
++
++    public LinearRegionFile(final RegionStorageInfo storageKey, final Path path, final Path directory, final RegionFileVersion compressionFormat, final boolean dsync, final int compressionLevel) throws IOException {
++        this.regionFile = path;
++        this.compressionLevel = compressionLevel;
++
++        this.compressor = LZ4Factory.fastestInstance().fastCompressor();
++        this.decompressor = LZ4Factory.fastestInstance().fastDecompressor();
++
++        final Runnable flushCheck = () -> {
++            while (!this.close) {
++                synchronized (saveLock) {
++                    if (this.markedToSave && activeSaveThreads < SAVE_THREAD_MAX_COUNT) {
++                        activeSaveThreads++;
++                        final Runnable flushOperation = () -> {
++                            try {
++                                this.flush();
++                            } catch (final IOException ex) {
++                                LOGGER.error("Region file {} flush failed", this.regionFile.toAbsolutePath(), ex);
++                            } finally {
++                                synchronized (saveLock) {
++                                    activeSaveThreads--;
++                                }
++                            }
++                        };
++
++                        final Thread saveThread = USE_VIRTUAL_THREAD ?
++                            Thread.ofVirtual().name("Linear IO - " + LinearRegionFile.this.hashCode()).unstarted(flushOperation) :
++                            Thread.ofPlatform().name("Linear IO - " + LinearRegionFile.this.hashCode()).unstarted(flushOperation);
++                        saveThread.setPriority(Thread.NORM_PRIORITY - 3);
++                        saveThread.start();
++                    }
++                }
++                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(SAVE_DELAY_MS));
++            }
++        };
++
++        this.bindThread = USE_VIRTUAL_THREAD ?
++            Thread.ofVirtual().name("Linear IO Schedule - " + this.hashCode()).unstarted(flushCheck) :
++            Thread.ofPlatform().name("Linear IO Schedule - " + this.hashCode()).unstarted(flushCheck);
++    }
++
++    public Path getRegionFile() {
++        return this.regionFile;
++    }
++
++    public ReentrantLock getFileLock() {
++        return this.fileLock;
++    }
++
++    private int chunkToBucketIdx(final int chunkX, final int chunkZ) {
++        final int bx = chunkX / this.bucketSize;
++        final int bz = chunkZ / this.bucketSize;
++        return bx * this.gridSize + bz;
++    }
++
++    private void openBucket(int chunkX, int chunkZ) {
++        chunkX = Math.floorMod(chunkX, 32);
++        chunkZ = Math.floorMod(chunkZ, 32);
++        final int idx = this.chunkToBucketIdx(chunkX, chunkZ);
++
++        if (this.bucketBuffers == null) {
++            return;
++        }
++        if (this.bucketBuffers[idx] != null) {
++            try {
++                final ByteArrayInputStream bucketByteStream = new ByteArrayInputStream(this.bucketBuffers[idx]);
++                final ZstdInputStream zstdStream = new ZstdInputStream(bucketByteStream);
++                final ByteBuffer bucketBuffer = ByteBuffer.wrap(zstdStream.readAllBytes());
++
++                final int bx = chunkX / this.bucketSize;
++                final int bz = chunkZ / this.bucketSize;
++
++                for (int cx = 0; cx < 32 / this.gridSize; cx++) {
++                    for (int cz = 0; cz < 32 / this.gridSize; cz++) {
++                        final int chunkIndex = (bx * (32 / this.gridSize) + cx) + (bz * (32 / this.gridSize) + cz) * 32;
++
++                        final int chunkSize = bucketBuffer.getInt();
++                        final long timestamp = bucketBuffer.getLong();
++                        this.chunkTimestamps[chunkIndex] = timestamp;
++
++                        if (chunkSize > 0) {
++                            final byte[] chunkData = new byte[chunkSize - 8];
++                            bucketBuffer.get(chunkData);
++
++                            final int maxCompressedLength = this.compressor.maxCompressedLength(chunkData.length);
++                            final byte[] compressed = new byte[maxCompressedLength];
++                            final int compressedLength = this.compressor.compress(chunkData, 0, chunkData.length, compressed, 0, maxCompressedLength);
++                            final byte[] finalCompressed = new byte[compressedLength];
++                            System.arraycopy(compressed, 0, finalCompressed, 0, compressedLength);
++
++                            this.buffer[chunkIndex] = finalCompressed;
++                            this.bufferUncompressedSize[chunkIndex] = chunkData.length;
++                        }
++                    }
++                }
++            } catch (final IOException ex) {
++                throw new RuntimeException("Region file corrupted: " + this.regionFile + " bucket: " + idx, ex);
++            }
++            this.bucketBuffers[idx] = null;
++        }
++    }
++
++    private synchronized void openRegionFile() {
++        if (this.regionFileOpen) {
++            return;
++        }
++        this.regionFileOpen = true;
++
++        final File file = this.regionFile.toFile();
++        if (!file.canRead()) {
++            this.bindThread.start();
++            return;
++        }
++
++        try {
++            final byte[] fileContent = Files.readAllBytes(this.regionFile);
++            final ByteBuffer buf = ByteBuffer.wrap(fileContent);
++
++            final long superBlock = buf.getLong();
++            if (superBlock != SUPERBLOCK) {
++                throw new RuntimeException("Invalid superblock: " + superBlock + " file " + this.regionFile);
++            }
++
++            final byte version = buf.get();
++            if (version == 1 || version == 2) {
++                this.parseLinearV1(buf);
++            } else if (version == 3) {
++                this.parseLinearV2(buf);
++            } else {
++                throw new RuntimeException("Invalid version: " + version + " file " + this.regionFile);
++            }
++
++            this.bindThread.start();
++        } catch (final IOException e) {
++            throw new RuntimeException("Failed to open region file " + this.regionFile, e);
++        }
++    }
++
++    private void parseLinearV1(final ByteBuffer buf) throws IOException {
++        final int headerSize = 32;
++        final int footerSize = 8;
++
++        // Skip newestTimestamp (Long) + Compression level (Byte) + Chunk count (Short)
++        buf.position(buf.position() + 11);
++
++        final int dataCount = buf.getInt();
++        final long fileLength = this.regionFile.toFile().length();
++        if (fileLength != headerSize + dataCount + footerSize) {
++            throw new IOException("Invalid file length: " + this.regionFile + " " + fileLength + " expected " + (headerSize + dataCount + footerSize));
++        }
++
++        buf.position(buf.position() + 8); // Skip data hash (Long)
++
++        final byte[] rawCompressed = new byte[dataCount];
++        buf.get(rawCompressed);
++
++        final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(rawCompressed);
++        final ZstdInputStream zstdInputStream = new ZstdInputStream(byteArrayInputStream);
++        final ByteBuffer decompressedBuffer = ByteBuffer.wrap(zstdInputStream.readAllBytes());
++
++        final int[] starts = new int[1024];
++        for (int i = 0; i < 1024; i++) {
++            starts[i] = decompressedBuffer.getInt();
++            decompressedBuffer.getInt(); // Skip timestamps
++        }
++
++        for (int i = 0; i < 1024; i++) {
++            if (starts[i] > 0) {
++                final int size = starts[i];
++                final byte[] chunkData = new byte[size];
++                decompressedBuffer.get(chunkData);
++
++                final int maxCompressedLength = this.compressor.maxCompressedLength(size);
++                final byte[] compressed = new byte[maxCompressedLength];
++                final int compressedLength = this.compressor.compress(chunkData, 0, size, compressed, 0, maxCompressedLength);
++                final byte[] finalCompressed = new byte[compressedLength];
++                System.arraycopy(compressed, 0, finalCompressed, 0, compressedLength);
++
++                this.buffer[i] = finalCompressed;
++                this.bufferUncompressedSize[i] = size;
++                this.chunkTimestamps[i] = getTimestamp();
++            }
++        }
++    }
++
++    private void parseLinearV2(final ByteBuffer buf) throws IOException {
++        buf.getLong(); // Skip newestTimestamp (Long)
++        this.gridSize = buf.get();
++        if (this.gridSize != 1 && this.gridSize != 2 && this.gridSize != 4 && this.gridSize != 8 && this.gridSize != 16 && this.gridSize != 32) {
++            throw new RuntimeException("Invalid grid size: " + this.gridSize + " file " + this.regionFile);
++        }
++        this.bucketSize = 32 / this.gridSize;
++
++        buf.getInt(); // Skip region_x (Int)
++        buf.getInt(); // Skip region_z (Int)
++
++        this.deserializeExistenceBitmap(buf);
++
++        while (true) {
++            final byte featureNameLength = buf.get();
++            if (featureNameLength == 0) {
++                break;
++            }
++            final byte[] featureNameBytes = new byte[featureNameLength];
++            buf.get(featureNameBytes);
++            buf.getInt(); // feature value
++        }
++
++        final int bucketCount = this.gridSize * this.gridSize;
++        final int[] bucketSizes = new int[bucketCount];
++        final byte[] bucketCompressionLevels = new byte[bucketCount];
++        final long[] bucketHashes = new long[bucketCount];
++        for (int i = 0; i < bucketCount; i++) {
++            bucketSizes[i] = buf.getInt();
++            bucketCompressionLevels[i] = buf.get();
++            bucketHashes[i] = buf.getLong();
++        }
++
++        this.bucketBuffers = new byte[bucketCount][];
++        for (int i = 0; i < bucketCount; i++) {
++            if (bucketSizes[i] > 0) {
++                this.bucketBuffers[i] = new byte[bucketSizes[i]];
++                buf.get(this.bucketBuffers[i]);
++                final long rawHash = LinearHash.xxhash64(this.bucketBuffers[i]);
++                if (rawHash != bucketHashes[i]) {
++                    throw new IOException("Region file hash incorrect " + this.regionFile);
++                }
++            }
++        }
++
++        final long footerSuperBlock = buf.getLong();
++        if (footerSuperBlock != SUPERBLOCK) {
++            throw new IOException("Footer superblock invalid " + this.regionFile);
++        }
++    }
++
++    private void markToSave() {
++        synchronized (this.markedToSaveLock) {
++            this.markedToSave = true;
++        }
++    }
++
++    private boolean isMarkedToSave() {
++        synchronized (this.markedToSaveLock) {
++            if (this.markedToSave) {
++                this.markedToSave = false;
++                return true;
++            }
++            return false;
++        }
++    }
++
++    public synchronized boolean doesChunkExist(final ChunkPos pos) throws Exception {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++        return this.bufferUncompressedSize[getChunkIndex(pos.x(), pos.z())] > 0;
++    }
++
++    @Override
++    public synchronized void flush() throws IOException {
++        if (!this.isMarkedToSave()) {
++            return;
++        }
++
++        this.openRegionFile();
++
++        final long timestamp = getTimestamp();
++        final File tempFile = new File(this.regionFile.toString() + ".tmp");
++        final FileOutputStream fileStream = new FileOutputStream(tempFile);
++        final DataOutputStream dataStream = new DataOutputStream(fileStream);
++
++        dataStream.writeLong(SUPERBLOCK);
++        dataStream.writeByte(VERSION);
++        dataStream.writeLong(timestamp);
++        dataStream.writeByte(this.gridSize);
++
++        final String fileName = this.regionFile.getFileName().toString();
++        final String[] parts = fileName.split("\\.");
++        int regionX = 0;
++        int regionZ = 0;
++        try {
++            if (parts.length >= 3) {
++                regionX = Integer.parseInt(parts[1]);
++                regionZ = Integer.parseInt(parts[2]);
++            } else {
++                LOGGER.warn("Unexpected file name format: {}", fileName);
++            }
++        } catch (final NumberFormatException e) {
++            LOGGER.error("Failed to parse region coordinates from file name: {}", fileName, e);
++        }
++
++        dataStream.writeInt(regionX);
++        dataStream.writeInt(regionZ);
++
++        final boolean[] chunkExistenceBitmap = new boolean[1024];
++        for (int i = 0; i < 1024; i++) {
++            chunkExistenceBitmap[i] = (this.bufferUncompressedSize[i] > 0);
++        }
++        this.writeSerializedExistenceBitmap(dataStream, chunkExistenceBitmap);
++
++        this.writeNBTFeatures(dataStream);
++
++        final int bucketCount = this.gridSize * this.gridSize;
++        final byte[][] buckets = new byte[bucketCount][];
++        for (int bx = 0; bx < this.gridSize; bx++) {
++            for (int bz = 0; bz < this.gridSize; bz++) {
++                final int bucketIdx = bx * this.gridSize + bz;
++                if (this.bucketBuffers != null && this.bucketBuffers[bucketIdx] != null) {
++                    buckets[bucketIdx] = this.bucketBuffers[bucketIdx];
++                    continue;
++                }
++
++                final ByteArrayOutputStream bucketStream = new ByteArrayOutputStream();
++                final ZstdOutputStream zstdStream = new ZstdOutputStream(bucketStream, this.compressionLevel);
++                final DataOutputStream bucketDataStream = new DataOutputStream(zstdStream);
++
++                for (int cx = 0; cx < 32 / this.gridSize; cx++) {
++                    for (int cz = 0; cz < 32 / this.gridSize; cz++) {
++                        final int chunkIndex = (bx * (32 / this.gridSize) + cx) + (bz * (32 / this.gridSize) + cz) * 32;
++                        if (this.bufferUncompressedSize[chunkIndex] > 0) {
++                            final byte[] chunkData = new byte[this.bufferUncompressedSize[chunkIndex]];
++                            this.decompressor.decompress(this.buffer[chunkIndex], 0, chunkData, 0, this.bufferUncompressedSize[chunkIndex]);
++                            bucketDataStream.writeInt(chunkData.length + 8);
++                            bucketDataStream.writeLong(this.chunkTimestamps[chunkIndex]);
++                            bucketDataStream.write(chunkData);
++                        } else {
++                            bucketDataStream.writeInt(0);
++                            bucketDataStream.writeLong(this.chunkTimestamps[chunkIndex]);
++                        }
++                    }
++                }
++                bucketDataStream.close();
++                buckets[bucketIdx] = bucketStream.toByteArray();
++            }
++        }
++
++        for (int i = 0; i < bucketCount; i++) {
++            dataStream.writeInt(buckets[i] != null ? buckets[i].length : 0);
++            dataStream.writeByte(this.compressionLevel);
++            long rawHash = 0;
++            if (buckets[i] != null) {
++                rawHash = LinearHash.xxhash64(buckets[i]);
++            }
++            dataStream.writeLong(rawHash);
++        }
++
++        for (int i = 0; i < bucketCount; i++) {
++            if (buckets[i] != null) {
++                dataStream.write(buckets[i]);
++            }
++        }
++
++        dataStream.writeLong(SUPERBLOCK);
++
++        dataStream.flush();
++        fileStream.getFD().sync();
++        fileStream.getChannel().force(true);
++        dataStream.close();
++        fileStream.close();
++
++        Files.move(tempFile.toPath(), this.regionFile, StandardCopyOption.REPLACE_EXISTING);
++    }
++
++    private void writeNBTFeatures(final DataOutputStream dataStream) throws IOException {
++        dataStream.writeByte(0); // End of NBT features
++    }
++
++    public static final int MAX_CHUNK_SIZE = 500 * 1024 * 1024;
++
++    @Override
++    public synchronized void write(final ChunkPos pos, final ByteBuffer buffer) {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++        try {
++            final byte[] b;
++            if (buffer.hasArray()) {
++                b = new byte[buffer.remaining()];
++                System.arraycopy(buffer.array(), buffer.arrayOffset() + buffer.position(), b, 0, buffer.remaining());
++            } else {
++                b = new byte[buffer.remaining()];
++                buffer.get(b);
++            }
++            final int uncompressedSize = b.length;
++
++            if (uncompressedSize > MAX_CHUNK_SIZE) {
++                LOGGER.error("Chunk dupe attempt {}", this.regionFile);
++                this.clear(pos);
++            } else {
++                final int maxCompressedLength = this.compressor.maxCompressedLength(b.length);
++                final byte[] compressed = new byte[maxCompressedLength];
++                final int compressedLength = this.compressor.compress(b, 0, b.length, compressed, 0, maxCompressedLength);
++                final byte[] finalCompressed = new byte[compressedLength];
++                System.arraycopy(compressed, 0, finalCompressed, 0, compressedLength);
++
++                final int index = getChunkIndex(pos.x(), pos.z());
++                this.buffer[index] = finalCompressed;
++                this.chunkTimestamps[index] = getTimestamp();
++                this.bufferUncompressedSize[index] = uncompressedSize;
++            }
++        } catch (final Exception e) {
++            LOGGER.error("Chunk write exception {} in {}", e, this.regionFile);
++        }
++        this.markToSave();
++    }
++
++    @Override
++    public DataOutputStream getChunkDataOutputStream(final ChunkPos pos) {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++        return new DataOutputStream(new BufferedOutputStream(new LinearRegionFile.ChunkBuffer(pos)));
++    }
++
++    @Override
++    public final MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(final CompoundTag data, final ChunkPos pos) throws IOException {
++        final LinearRegionFile.ChunkBuffer buffer = new ChunkBuffer(pos);
++        buffer.moonrise$setWriteOnClose(false);
++
++        final DataOutputStream out = new DataOutputStream(new BufferedOutputStream(buffer));
++
++        return new MoonriseRegionFileIO.RegionDataController.WriteData(
++            data, MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.WRITE,
++            out, buffer::moonrise$write
++        );
++    }
++
++    private class ChunkBuffer extends ByteArrayOutputStream implements ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemChunkBuffer {
++        private final ChunkPos pos;
++        private boolean writeOnClose = true;
++
++        public ChunkBuffer(final ChunkPos pos) {
++            super();
++            this.pos = pos;
++        }
++
++        @Override
++        public final boolean moonrise$getWriteOnClose() {
++            return this.writeOnClose;
++        }
++
++        @Override
++        public final void moonrise$setWriteOnClose(final boolean value) {
++            this.writeOnClose = value;
++        }
++
++        @Override
++        public final void moonrise$write(final net.minecraft.world.level.chunk.storage.RegionFile regionFile) throws IOException {
++            final ByteBuffer bytebuffer = ByteBuffer.wrap(this.buf, 0, this.count);
++            LinearRegionFile.this.write(this.pos, bytebuffer);
++        }
++
++        @Override
++        public void close() throws IOException {
++            if (this.writeOnClose) {
++                final ByteBuffer bytebuffer = ByteBuffer.wrap(this.buf, 0, this.count);
++                LinearRegionFile.this.write(this.pos, bytebuffer);
++            }
++        }
++    }
++
++    @Override
++    public synchronized @Nullable DataInputStream getChunkDataInputStream(final ChunkPos pos) {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++
++        final int idx = getChunkIndex(pos.x(), pos.z());
++        if (this.bufferUncompressedSize[idx] != 0) {
++            final byte[] content = new byte[this.bufferUncompressedSize[idx]];
++            this.decompressor.decompress(this.buffer[idx], 0, content, 0, this.bufferUncompressedSize[idx]);
++            return new DataInputStream(new ByteArrayInputStream(content));
++        }
++        return null;
++    }
++
++    @Override
++    public synchronized void clear(final ChunkPos pos) {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++        final int i = getChunkIndex(pos.x(), pos.z());
++        this.buffer[i] = null;
++        this.bufferUncompressedSize[i] = 0;
++        this.chunkTimestamps[i] = 0;
++        this.markToSave();
++    }
++
++    @Override
++    public synchronized boolean hasChunk(final ChunkPos pos) {
++        this.openRegionFile();
++        this.openBucket(pos.x(), pos.z());
++        return this.bufferUncompressedSize[getChunkIndex(pos.x(), pos.z())] > 0;
++    }
++
++    @Override
++    public synchronized void close() throws IOException {
++        this.openRegionFile();
++        this.close = true;
++        try {
++            this.flush();
++        } catch (final IOException e) {
++            throw new IOException("Region flush IOException " + e + " " + this.regionFile, e);
++        }
++    }
++
++    private static int getChunkIndex(final int x, final int z) {
++        return (x & 31) + ((z & 31) << 5);
++    }
++
++    private static int getTimestamp() {
++        return (int) (System.currentTimeMillis() / 1000L);
++    }
++
++    @Override
++    public boolean recalculateHeader() {
++        return false;
++    }
++
++    @Override
++    public void setOversized(final int x, final int z, final boolean something) {
++    }
++
++    @Override
++    public CompoundTag getOversizedData(final int x, final int z) throws IOException {
++        throw new IOException("getOversizedData is a stub " + this.regionFile);
++    }
++
++    @Override
++    public boolean isOversized(final int x, final int z) {
++        return false;
++    }
++
++    @Override
++    public Path getPath() {
++        return this.regionFile;
++    }
++
++    private boolean[] deserializeExistenceBitmap(final ByteBuffer buf) {
++        final boolean[] result = new boolean[1024];
++        for (int i = 0; i < 128; i++) {
++            final byte b = buf.get();
++            for (int j = 0; j < 8; j++) {
++                result[i * 8 + j] = ((b >> (7 - j)) & 1) == 1;
++            }
++        }
++        return result;
++    }
++
++    private void writeSerializedExistenceBitmap(final DataOutputStream out, final boolean[] bitmap) throws IOException {
++        for (int i = 0; i < 128; i++) {
++            byte b = 0;
++            for (int j = 0; j < 8; j++) {
++                if (bitmap[i * 8 + j]) {
++                    b |= (1 << (7 - j));
++                }
++            }
++            out.writeByte(b);
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/io/papermc/paper/linear/LinearRegionFileAdapter.java b/io/papermc/paper/linear/LinearRegionFileAdapter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..5480b82e9a0966ab70931bd5fcc44a09ab5c1c66
+--- /dev/null
++++ b/io/papermc/paper/linear/LinearRegionFileAdapter.java
+@@ -0,0 +1,78 @@
++package io.papermc.paper.linear;
++
++public final class LinearRegionFileAdapter extends net.minecraft.world.level.chunk.storage.RegionFile {
++    private final LinearRegionFile delegate;
++
++    public LinearRegionFileAdapter(net.minecraft.world.level.chunk.storage.RegionStorageInfo info,
++                                   java.nio.file.Path path,
++                                   java.nio.file.Path directory,
++                                   boolean sync,
++                                   int compressionLevel) throws java.io.IOException {
++        super(info, path);
++        this.delegate = new LinearRegionFile(info, path, directory, sync, compressionLevel);
++    }
++
++    public LinearRegionFile getDelegate() {
++        return this.delegate;
++    }
++
++    @Override
++    public java.nio.file.Path getPath() {
++        return this.delegate.getPath();
++    }
++
++    @Override
++    public java.io.DataInputStream getChunkDataInputStream(final net.minecraft.world.level.ChunkPos pos) throws java.io.IOException {
++        return this.delegate.getChunkDataInputStream(pos);
++    }
++
++    @Override
++    public java.io.DataOutputStream getChunkDataOutputStream(final net.minecraft.world.level.ChunkPos pos) throws java.io.IOException {
++        return this.delegate.getChunkDataOutputStream(pos);
++    }
++
++    @Override
++    public boolean doesChunkExist(final net.minecraft.world.level.ChunkPos pos) {
++        try {
++            return this.delegate.doesChunkExist(pos);
++        } catch (final Exception e) {
++            return false;
++        }
++    }
++
++    @Override
++    public boolean hasChunk(final net.minecraft.world.level.ChunkPos pos) {
++        return this.delegate.hasChunk(pos);
++    }
++
++    @Override
++    public void flush() throws java.io.IOException {
++        this.delegate.flush();
++    }
++
++    @Override
++    public void clear(final net.minecraft.world.level.ChunkPos pos) throws java.io.IOException {
++        this.delegate.clear(pos);
++    }
++
++    @Override
++    public void close() throws java.io.IOException {
++        this.delegate.close();
++    }
++
++    @Override
++    public ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(
++            final net.minecraft.nbt.CompoundTag data, final net.minecraft.world.level.ChunkPos pos) throws java.io.IOException {
++        return this.delegate.moonrise$startWrite(data, pos);
++    }
++
++    @Override
++    public boolean recalculateHeader() throws java.io.IOException {
++        return false;
++    }
++
++    @Override
++    public int getRecalculateCount() {
++        return 0;
++    }
++}
+\ No newline at end of file
+diff --git a/io/papermc/paper/linear/RegionFormat.java b/io/papermc/paper/linear/RegionFormat.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..22e1715319ca9f32f7f61a5dfc11273fb3f072d2
+--- /dev/null
++++ b/io/papermc/paper/linear/RegionFormat.java
+@@ -0,0 +1,34 @@
++package io.papermc.paper.linear;
++
++public enum RegionFormat {
++    MCA("mca", ".mca"),
++    LINEAR("linear", ".linear");
++
++    private final String configName;
++    private final String extension;
++
++    RegionFormat(final String configName, final String extension) {
++        this.configName = configName;
++        this.extension = extension;
++    }
++
++    public String configName() {
++        return this.configName;
++    }
++
++    public String extension() {
++        return this.extension;
++    }
++
++    public static RegionFormat fromString(final String name) {
++        if (name == null) {
++            return MCA;
++        }
++        for (final RegionFormat format : values()) {
++            if (format.configName.equalsIgnoreCase(name) || format.name().equalsIgnoreCase(name)) {
++                return format;
++            }
++        }
++        throw new IllegalArgumentException("Unknown region format: '" + name + "'. Supported formats: MCA, LINEAR");
++    }
++}
+\ No newline at end of file
+diff --git a/io/papermc/paper/linear/WorldFormatConverter.java b/io/papermc/paper/linear/WorldFormatConverter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea457a4011ca4caa96add849f2d5b77bb310914c
+--- /dev/null
++++ b/io/papermc/paper/linear/WorldFormatConverter.java
+@@ -0,0 +1,563 @@
++package io.papermc.paper.linear;
++
++import com.mojang.logging.LogUtils;
++import net.minecraft.core.Registry;
++import net.minecraft.core.registries.Registries;
++import net.minecraft.nbt.CompoundTag;
++import net.minecraft.nbt.NbtAccounter;
++import net.minecraft.nbt.NbtIo;
++import net.minecraft.resources.ResourceKey;
++import net.minecraft.server.MinecraftServer;
++import net.minecraft.world.level.ChunkPos;
++import net.minecraft.world.level.Level;
++import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
++import net.minecraft.world.level.dimension.LevelStem;
++import net.minecraft.world.level.storage.LevelStorageSource;
++import org.slf4j.Logger;
++
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
++import java.io.IOException;
++import java.nio.file.*;
++import java.nio.file.attribute.BasicFileAttributes;
++import java.time.LocalDateTime;
++import java.time.format.DateTimeFormatter;
++import java.util.*;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++import java.util.stream.Stream;
++
++/**
++ * World region format conversion pipeline:
++ * - Detects required conversions across all world dimensions and subfolders (region, entities, poi)
++ * - Aborts with detailed message if conversion needed but automatic is false
++ * - Displays 30s countdown (configurable) with clean cancellation
++ * - Takes full world backup before conversion (non-recursive)
++ * - Converts MCA <-> Linear with verification (re-read & NBT comparison) and crash-recovery state tracking
++ */
++public final class WorldFormatConverter {
++    private static final Logger LOGGER = LogUtils.getLogger();
++    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
++    private static final String CONVERSION_STATE_FILE = ".conversion-state";
++
++    public record WorldFolderTarget(
++        String worldName,
++        Path worldDir,
++        WorldsSettings.WorldFormatSetting setting
++    ) {}
++
++    public record ConversionTask(
++        String worldName,
++        Path worldDir,
++        Path subFolder,
++        String folderType,
++        RegionFormat sourceFormat,
++        RegionFormat targetFormat,
++        int targetCompression,
++        WorldsSettings.WorldFormatSetting setting,
++        List<Path> filesToConvert
++    ) {}
++
++    private WorldFormatConverter() {}
++
++    public static void runStartupCheck(final MinecraftServer server) {
++        final WorldsSettings settings = WorldsSettings.get();
++        if (settings == null) {
++            return;
++        }
++
++        // Collect all dimension folders for all configured stems
++        final List<WorldFolderTarget> targets = discoverWorldTargets(server, settings);
++
++        // Scan for required conversions
++        final List<ConversionTask> tasks = new ArrayList<>();
++        final List<ConversionTask> unapprovedTasks = new ArrayList<>();
++
++        for (final WorldFolderTarget target : targets) {
++            final List<ConversionTask> worldTasks = findConversionTasks(target);
++            for (final ConversionTask task : worldTasks) {
++                if (task.setting().conversion().automatic()) {
++                    tasks.add(task);
++                } else {
++                    unapprovedTasks.add(task);
++                }
++            }
++        }
++
++        // Check if there are conversions needed but automatic is disabled
++        if (!unapprovedTasks.isEmpty()) {
++            final StringBuilder sb = new StringBuilder();
++            sb.append("\n======================================================================\n");
++            sb.append(" [!] FORMAT CONVERSION REQUIRED BUT AUTOMATIC CONVERSION IS DISABLED!\n");
++            sb.append("======================================================================\n");
++            sb.append("The following worlds have files in a format different from configured target format:\n");
++            for (final ConversionTask t : unapprovedTasks) {
++                sb.append(String.format(" - World: %s | Folder: %s | Source: %s -> Target: %s (%d files)\n",
++                    t.worldName(), t.subFolder().getFileName(), t.sourceFormat(), t.targetFormat(), t.filesToConvert().size()));
++            }
++            sb.append("\nTo allow automatic conversion, enable it in config/worlds-settings.yml:\n");
++            sb.append("defaults:\n  conversion:\n    automatic: true\n");
++            sb.append("Or enable it specifically per world under 'worlds'.\n");
++            sb.append("The server will now shut down to prevent data corruption.\n");
++            sb.append("======================================================================\n");
++            LOGGER.error(sb.toString());
++            throw new IllegalStateException("Format conversion required but automatic conversion is disabled in worlds-settings.yml");
++        }
++
++        if (tasks.isEmpty()) {
++            return;
++        }
++
++        // We have tasks to execute
++        executeConversionPipeline(tasks);
++    }
++
++    private static final Object FOLDER_CONVERSION_LOCK = new Object();
++    private static final Set<Path> CHECKED_FOLDERS = Collections.synchronizedSet(new HashSet<>());
++
++    public static void checkAndConvertFolder(final Path folder, final WorldsSettings settings) {
++        if (folder == null || !Files.isDirectory(folder)) {
++            return;
++        }
++        final Path normalized = folder.toAbsolutePath().normalize();
++        if (CHECKED_FOLDERS.contains(normalized)) {
++            return;
++        }
++
++        synchronized (FOLDER_CONVERSION_LOCK) {
++            if (CHECKED_FOLDERS.contains(normalized)) {
++                return;
++            }
++
++            final WorldsSettings.WorldFormatSetting setting = settings.getForPath(folder);
++            final RegionFormat targetFormat = setting.regionFormat();
++            final String otherExt = targetFormat == RegionFormat.LINEAR ? ".mca" : ".linear";
++            final RegionFormat sourceFormat = targetFormat == RegionFormat.LINEAR ? RegionFormat.MCA : RegionFormat.LINEAR;
++
++            final List<Path> filesToConvert = new ArrayList<>();
++            try (final Stream<Path> stream = Files.list(folder)) {
++                stream.forEach(file -> {
++                    final String name = file.getFileName().toString();
++                    if (name.startsWith("r.") && name.endsWith(otherExt)) {
++                        filesToConvert.add(file);
++                    }
++                });
++            } catch (final IOException ex) {
++                LOGGER.error("Failed to list files in {}", folder.toAbsolutePath(), ex);
++                return;
++            }
++
++            if (filesToConvert.isEmpty()) {
++                CHECKED_FOLDERS.add(normalized);
++                return;
++            }
++
++            // Conversion is required
++            final Path worldDir = folder.getParent() != null ? folder.getParent() : folder;
++            final String worldName = worldDir.getFileName() != null ? worldDir.getFileName().toString() : "unknown";
++
++            if (!setting.conversion().automatic()) {
++                final String msg = String.format(
++                    "World folder '%s' (subfolder '%s') contains %d files in %s format, but target format is %s and automatic conversion is disabled in worlds-settings.yml! Operation halted.",
++                    worldName, folder.getFileName(), filesToConvert.size(), sourceFormat, targetFormat
++                );
++                LOGGER.error(msg);
++                throw new IllegalStateException(msg);
++            }
++
++            LOGGER.warn("Dynamic folder conversion triggered for '{}' ({}) from {} to {} ({} files)...",
++                worldName, folder.getFileName(), sourceFormat, targetFormat, filesToConvert.size());
++
++            final ConversionTask task = new ConversionTask(
++                worldName,
++                worldDir,
++                folder,
++                folder.getFileName().toString(),
++                sourceFormat,
++                targetFormat,
++                setting.linearCompressionLevel(),
++                setting,
++                filesToConvert
++            );
++
++            executeConversionPipeline(List.of(task));
++
++            CHECKED_FOLDERS.add(normalized);
++            LOGGER.info("Dynamic conversion completed for '{}' ({}).", worldName, folder.getFileName());
++        }
++    }
++
++
++    private static List<WorldFolderTarget> discoverWorldTargets(final MinecraftServer server, final WorldsSettings settings) {
++        final List<WorldFolderTarget> result = new ArrayList<>();
++        final LevelStorageSource.LevelStorageAccess storageSource = server.storageSource;
++        final Registry<LevelStem> levelStemRegistry = server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM);
++
++        final Set<Path> visitedPaths = new HashSet<>();
++
++        for (final LevelStem stem : levelStemRegistry) {
++            final ResourceKey<LevelStem> stemKey = server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM).getResourceKey(stem).orElse(null);
++            if (stemKey == null) continue;
++
++            final ResourceKey<Level> dimKey = Registries.levelStemToLevel(stemKey);
++            final Path dimPath = storageSource.getDimensionPath(dimKey);
++            if (dimPath == null || !Files.isDirectory(dimPath)) continue;
++
++            final Path normalized = dimPath.toAbsolutePath().normalize();
++            if (visitedPaths.add(normalized)) {
++                final String worldName = dimPath.getFileName().toString();
++                final WorldsSettings.WorldFormatSetting setting = settings.getForWorld(worldName);
++                result.add(new WorldFolderTarget(worldName, dimPath, setting));
++            }
++        }
++
++        // Also check root world folder
++        final Path rootWorld = storageSource.getDimensionPath(Level.OVERWORLD);
++        if (rootWorld != null && Files.isDirectory(rootWorld)) {
++            final Path normRoot = rootWorld.toAbsolutePath().normalize();
++            if (visitedPaths.add(normRoot)) {
++                final String rootName = rootWorld.getFileName().toString();
++                final WorldsSettings.WorldFormatSetting setting = settings.getForWorld(rootName);
++                result.add(new WorldFolderTarget(rootName, rootWorld, setting));
++            }
++        }
++
++        return result;
++    }
++
++    private static List<ConversionTask> findConversionTasks(final WorldFolderTarget target) {
++        final List<ConversionTask> tasks = new ArrayList<>();
++        final String[] subFolders = {"region", "entities", "poi"};
++        final RegionFormat targetFormat = target.setting().regionFormat();
++        final String targetExt = targetFormat.extension();
++        final String otherExt = targetFormat == RegionFormat.LINEAR ? ".mca" : ".linear";
++        final RegionFormat sourceFormat = targetFormat == RegionFormat.LINEAR ? RegionFormat.MCA : RegionFormat.LINEAR;
++
++        for (final String sub : subFolders) {
++            final Path subPath = target.worldDir().resolve(sub);
++            if (!Files.isDirectory(subPath)) {
++                continue;
++            }
++
++            final List<Path> filesToConvert = new ArrayList<>();
++            try (final Stream<Path> stream = Files.list(subPath)) {
++                stream.forEach(file -> {
++                    final String name = file.getFileName().toString();
++                    if (name.startsWith("r.") && name.endsWith(otherExt)) {
++                        filesToConvert.add(file);
++                    }
++                });
++            } catch (final IOException ex) {
++                LOGGER.error("Failed to list files in {}", subPath.toAbsolutePath(), ex);
++            }
++
++            if (!filesToConvert.isEmpty()) {
++                tasks.add(new ConversionTask(
++                    target.worldName(),
++                    target.worldDir(),
++                    subPath,
++                    sub,
++                    sourceFormat,
++                    targetFormat,
++                    target.setting().linearCompressionLevel(),
++                    target.setting(),
++                    filesToConvert
++                ));
++            }
++        }
++
++        return tasks;
++    }
++
++    private static void executeConversionPipeline(final List<ConversionTask> tasks) {
++        final StringBuilder warning = new StringBuilder();
++        warning.append("\n======================================================================\n");
++        warning.append(" [!] WORLD FORMAT CONVERSION SCHEDULED\n");
++        warning.append("======================================================================\n");
++        warning.append("The following worlds and folders will be converted:\n");
++
++        final Set<Path> worldsToBackup = new LinkedHashSet<>();
++        int totalFiles = 0;
++        int maxCountdown = 0;
++
++        for (final ConversionTask task : tasks) {
++            warning.append(String.format(" - World: %s | Folder: %s | %s -> %s (%d files)\n",
++                task.worldName(), task.subFolder().getFileName(), task.sourceFormat(), task.targetFormat(), task.filesToConvert().size()));
++            worldsToBackup.add(task.worldDir());
++            totalFiles += task.filesToConvert().size();
++            maxCountdown = Math.max(maxCountdown, task.setting().conversion().countdownSeconds());
++        }
++
++        warning.append(String.format("Total files to convert: %d\n", totalFiles));
++
++        final boolean anyBackup = tasks.stream().anyMatch(t -> t.setting().conversion().backupEnabled());
++        final String backupDir = tasks.stream().map(t -> t.setting().conversion().backupDirectory()).findFirst().orElse("backups/world-conversion");
++
++        if (anyBackup) {
++            warning.append(String.format("Backup: ENABLED (directory: %s)\n", backupDir));
++        } else {
++            warning.append("Backup: [!] DISABLED (No backup will be created!)\n");
++        }
++        warning.append("======================================================================\n");
++        LOGGER.warn(warning.toString());
++
++        // Countdown with interrupt support
++        if (maxCountdown > 0) {
++            runCountdown(maxCountdown);
++        }
++
++        // Perform backups
++        for (final Path worldDir : worldsToBackup) {
++            final ConversionTask repTask = tasks.stream().filter(t -> t.worldDir().equals(worldDir)).findFirst().orElse(null);
++            if (repTask != null && repTask.setting().conversion().backupEnabled()) {
++                performBackup(worldDir, repTask.setting().conversion().backupDirectory());
++            }
++        }
++
++        // Perform conversions
++        LOGGER.info("Starting format conversion of {} files...", totalFiles);
++        final long startMs = System.currentTimeMillis();
++        int convertedFiles = 0;
++
++        for (final ConversionTask task : tasks) {
++            LOGGER.info("Converting {}/{} ({} -> {})...", task.worldName(), task.subFolder().getFileName(), task.sourceFormat(), task.targetFormat());
++            final Path stateFile = task.subFolder().resolve(CONVERSION_STATE_FILE);
++
++            for (final Path srcFile : task.filesToConvert()) {
++                convertSingleFile(srcFile, task.targetFormat(), task.targetCompression(), stateFile);
++                convertedFiles++;
++                LOGGER.info("Progress: {}/{} files converted ({})", convertedFiles, totalFiles, srcFile.getFileName());
++            }
++
++            try {
++                Files.deleteIfExists(stateFile);
++            } catch (final IOException ignored) {}
++        }
++
++        final long elapsed = System.currentTimeMillis() - startMs;
++        LOGGER.info("======================================================================");
++        LOGGER.info("Format conversion completed successfully: {} files in {} ms.", convertedFiles, elapsed);
++        LOGGER.info("======================================================================");
++    }
++
++    private static void runCountdown(final int seconds) {
++        final AtomicBoolean cancelled = new AtomicBoolean(false);
++        final Thread mainThread = Thread.currentThread();
++
++        final Thread shutdownHook = new Thread(() -> {
++            cancelled.set(true);
++            mainThread.interrupt();
++        }, "Conversion-Shutdown-Watcher");
++
++        Runtime.getRuntime().addShutdownHook(shutdownHook);
++
++        try {
++            for (int i = seconds; i > 0; i--) {
++                if (cancelled.get()) {
++                    LOGGER.warn("Conversion aborted by shutdown request.");
++                    throw new RuntimeException("Conversion aborted by user.");
++                }
++                if (i == seconds || i == 20 || i == 10 || i <= 5) {
++                    LOGGER.warn("Conversion will begin in {} seconds... Press Ctrl+C to cancel.", i);
++                }
++                Thread.sleep(1000);
++            }
++        } catch (final InterruptedException e) {
++            LOGGER.warn("Conversion aborted during countdown.");
++            throw new RuntimeException("Conversion aborted by user.", e);
++        } finally {
++            try {
++                Runtime.getRuntime().removeShutdownHook(shutdownHook);
++            } catch (final IllegalStateException ignored) {}
++        }
++    }
++
++    private static void performBackup(final Path worldDir, final String backupDirPath) {
++        final String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
++        final String worldName = worldDir.getFileName().toString();
++        final Path targetBase = Paths.get(backupDirPath);
++        final Path backupTarget = targetBase.resolve(worldName + "_" + timestamp);
++
++        // Prevent recursive backup: verify backupTarget is not inside worldDir
++        try {
++            final Path worldAbs = worldDir.toRealPath();
++            final Path targetAbs = backupTarget.toAbsolutePath().normalize();
++            if (targetAbs.startsWith(worldAbs)) {
++                throw new IllegalStateException("Backup target directory (" + targetAbs + ") cannot be inside the world folder (" + worldAbs + ")");
++            }
++
++            LOGGER.info("Creating backup of '{}' to '{}'...", worldName, backupTarget.toAbsolutePath());
++            Files.createDirectories(backupTarget);
++
++            Files.walkFileTree(worldDir, new SimpleFileVisitor<>() {
++                @Override
++                public FileVisitResult preVisitDirectory(final Path dir, final BasicFileAttributes attrs) throws IOException {
++                    final Path rel = worldDir.relativize(dir);
++                    final Path dest = backupTarget.resolve(rel);
++                    Files.createDirectories(dest);
++                    return FileVisitResult.CONTINUE;
++                }
++
++                @Override
++                public FileVisitResult visitFile(final Path file, final BasicFileAttributes attrs) throws IOException {
++                    final Path rel = worldDir.relativize(file);
++                    final Path dest = backupTarget.resolve(rel);
++                    Files.copy(file, dest, StandardCopyOption.COPY_ATTRIBUTES);
++                    return FileVisitResult.CONTINUE;
++                }
++            });
++
++            LOGGER.info("Backup of '{}' completed successfully.", worldName);
++        } catch (final IOException ex) {
++            LOGGER.error("Backup failed for world '{}'. Conversion halted to prevent data loss!", worldName, ex);
++            throw new RuntimeException("Backup failed: " + ex.getMessage(), ex);
++        }
++    }
++
++    private static void convertSingleFile(final Path srcFile, final RegionFormat targetFormat, final int targetCompression, final Path stateFile) {
++        final String srcName = srcFile.getFileName().toString();
++        final Matcher matcher = REGION_FILE_PATTERN.matcher(srcName);
++        if (!matcher.matches()) {
++            return;
++        }
++
++        final int regX = Integer.parseInt(matcher.group(1));
++        final int regZ = Integer.parseInt(matcher.group(2));
++        final String targetName = "r." + regX + "." + regZ + targetFormat.extension();
++        final Path dstFile = srcFile.resolveSibling(targetName);
++        final Path tempDstFile = srcFile.resolveSibling(targetName + ".tmp");
++
++        // Write state file before processing
++        try {
++            Files.writeString(stateFile, srcName + " -> " + targetName + "\n", StandardOpenOption.CREATE, StandardOpenOption.WRITE);
++        } catch (final IOException ignored) {}
++
++        try {
++            // Read all chunks from source file
++            final Map<ChunkPos, CompoundTag> loadedChunks = new HashMap<>();
++            final RegionStorageInfo info = new RegionStorageInfo("conversion", Level.OVERWORLD, "chunk");
++
++            if (srcName.endsWith(".mca")) {
++                try (final RegionFile mca = new RegionFile(info, srcFile, srcFile.getParent(), true)) {
++                    for (int x = 0; x < 32; x++) {
++                        for (int z = 0; z < 32; z++) {
++                            final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
++                            if (mca.hasChunk(pos)) {
++                                try (final DataInputStream in = mca.getChunkDataInputStream(pos)) {
++                                    if (in != null) {
++                                        final CompoundTag tag = NbtIo.read(in);
++                                        if (tag != null) {
++                                            loadedChunks.put(pos, tag);
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            } else if (srcName.endsWith(".linear")) {
++                try (final LinearRegionFile linear = new LinearRegionFile(info, srcFile, srcFile.getParent(), true, targetCompression)) {
++                    for (int x = 0; x < 32; x++) {
++                        for (int z = 0; z < 32; z++) {
++                            final ChunkPos pos = new ChunkPos((regX << 5) + x, (regZ << 5) + z);
++                            if (linear.hasChunk(pos)) {
++                                try (final DataInputStream in = linear.getChunkDataInputStream(pos)) {
++                                    if (in != null) {
++                                        final CompoundTag tag = NbtIo.read(in);
++                                        if (tag != null) {
++                                            loadedChunks.put(pos, tag);
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++
++            // Write all loaded chunks into temp destination file
++            Files.deleteIfExists(tempDstFile);
++
++            if (targetFormat == RegionFormat.LINEAR) {
++                try (final LinearRegionFile dstLinear = new LinearRegionFile(info, tempDstFile, tempDstFile.getParent(), true, targetCompression)) {
++                    for (final Map.Entry<ChunkPos, CompoundTag> entry : loadedChunks.entrySet()) {
++                        try (final DataOutputStream out = dstLinear.getChunkDataOutputStream(entry.getKey())) {
++                            NbtIo.write(entry.getValue(), out);
++                        }
++                    }
++                    dstLinear.flush();
++                }
++            } else {
++                try (final RegionFile dstMca = new RegionFile(info, tempDstFile, tempDstFile.getParent(), true)) {
++                    for (final Map.Entry<ChunkPos, CompoundTag> entry : loadedChunks.entrySet()) {
++                        try (final DataOutputStream out = dstMca.getChunkDataOutputStream(entry.getKey())) {
++                            NbtIo.write(entry.getValue(), out);
++                        }
++                    }
++                    dstMca.flush();
++                }
++            }
++
++            // Verification: re-read temp file and compare decoded NBT tags
++            verifyConvertedFile(tempDstFile, targetFormat, targetCompression, loadedChunks, regX, regZ);
++
++            // Verified! Atomic replace
++            Files.move(tempDstFile, dstFile, StandardCopyOption.REPLACE_EXISTING);
++
++            // Only delete source file after dstFile is safely placed
++            Files.deleteIfExists(srcFile);
++
++        } catch (final Exception ex) {
++            LOGGER.error("Failed to convert file {}", srcFile.toAbsolutePath(), ex);
++            try {
++                Files.deleteIfExists(tempDstFile);
++            } catch (final IOException ignored) {}
++            throw new RuntimeException("Conversion failed for file " + srcFile.getFileName() + ": " + ex.getMessage(), ex);
++        }
++    }
++
++    private static void verifyConvertedFile(final Path file, final RegionFormat format, final int compression,
++                                            final Map<ChunkPos, CompoundTag> originalChunks, final int regX, final int regZ) throws Exception {
++        final RegionStorageInfo info = new RegionStorageInfo("verify", Level.OVERWORLD, "chunk");
++
++        if (format == RegionFormat.LINEAR) {
++            try (final LinearRegionFile linear = new LinearRegionFile(info, file, file.getParent(), true, compression)) {
++                for (final Map.Entry<ChunkPos, CompoundTag> entry : originalChunks.entrySet()) {
++                    final ChunkPos pos = entry.getKey();
++                    if (!linear.hasChunk(pos)) {
++                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted linear file");
++                    }
++                    try (final DataInputStream in = linear.getChunkDataInputStream(pos)) {
++                        if (in == null) {
++                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
++                        }
++                        final CompoundTag readTag = NbtIo.read(in);
++                        if (!entry.getValue().equals(readTag)) {
++                            throw new IllegalStateException("Verification failed: NBT content mismatch for chunk " + pos);
++                        }
++                    }
++                }
++            }
++        } else {
++            try (final RegionFile mca = new RegionFile(info, file, file.getParent(), true)) {
++                for (final Map.Entry<ChunkPos, CompoundTag> entry : originalChunks.entrySet()) {
++                    final ChunkPos pos = entry.getKey();
++                    if (!mca.hasChunk(pos)) {
++                        throw new IllegalStateException("Verification failed: chunk " + pos + " missing in converted mca file");
++                    }
++                    try (final DataInputStream in = mca.getChunkDataInputStream(pos)) {
++                        if (in == null) {
++                            throw new IllegalStateException("Verification failed: input stream null for chunk " + pos);
++                        }
++                        final CompoundTag readTag = NbtIo.read(in);
++                        if (!entry.getValue().equals(readTag)) {
++                            throw new IllegalStateException("Verification failed: NBT content mismatch for chunk " + pos);
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/io/papermc/paper/linear/WorldsSettings.java b/io/papermc/paper/linear/WorldsSettings.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..30c6bdb2e2129b6477008452c87774f69237f209
+--- /dev/null
++++ b/io/papermc/paper/linear/WorldsSettings.java
+@@ -0,0 +1,277 @@
++package io.papermc.paper.linear;
++
++import org.slf4j.Logger;
++import com.mojang.logging.LogUtils;
++import org.spongepowered.configurate.CommentedConfigurationNode;
++import org.spongepowered.configurate.ConfigurateException;
++import org.spongepowered.configurate.ConfigurationNode;
++import org.spongepowered.configurate.loader.HeaderMode;
++import org.spongepowered.configurate.yaml.NodeStyle;
++import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
++
++import java.io.IOException;
++import java.nio.file.AtomicMoveNotSupportedException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardCopyOption;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
++
++/**
++ * World region format configuration manager (config/worlds-settings.yml).
++ */
++public final class WorldsSettings {
++    private static final Logger LOGGER = LogUtils.getLogger();
++    public static final String FILE_NAME = "worlds-settings.yml";
++    public static final int CURRENT_CONFIG_VERSION = 1;
++
++    public record ConversionSettings(
++        boolean automatic,
++        int countdownSeconds,
++        boolean backupEnabled,
++        String backupDirectory
++    ) {}
++
++    public record WorldFormatSetting(
++        RegionFormat regionFormat,
++        int linearCompressionLevel,
++        ConversionSettings conversion
++    ) {}
++
++    private static volatile WorldsSettings instance;
++
++    private final Path configFile;
++    private final WorldFormatSetting defaults;
++    private final Map<String, WorldFormatSetting> worldSettings = new HashMap<>();
++    private final Map<Path, WorldFormatSetting> resolvedPathCache = new ConcurrentHashMap<>();
++
++    private WorldsSettings(final Path configFile, final WorldFormatSetting defaults, final Map<String, WorldFormatSetting> worldSettings) {
++        this.configFile = configFile;
++        this.defaults = defaults;
++        this.worldSettings.putAll(worldSettings);
++    }
++
++    public static WorldsSettings get() {
++        return instance;
++    }
++
++    public static synchronized WorldsSettings load(final Path configDir) {
++        final Path path = configDir.resolve(FILE_NAME);
++        try {
++            if (!Files.exists(configDir)) {
++                Files.createDirectories(configDir);
++            }
++
++            final YamlConfigurationLoader loader = YamlConfigurationLoader.builder()
++                .path(path)
++                .nodeStyle(NodeStyle.BLOCK)
++                .headerMode(HeaderMode.PRESET)
++                .indent(2)
++                .build();
++
++            CommentedConfigurationNode root;
++            boolean isNewFile = !Files.exists(path);
++
++            if (isNewFile) {
++                root = loader.createNode();
++            } else {
++                root = loader.load();
++            }
++
++            // Check config-version
++            final ConfigurationNode versionNode = root.node("config-version");
++            if (!versionNode.virtual()) {
++                final int version = versionNode.getInt(CURRENT_CONFIG_VERSION);
++                if (version > CURRENT_CONFIG_VERSION) {
++                    LOGGER.warn("Unknown newer config-version {} in {} (expected <= {}). Keeping existing configuration without overwriting.",
++                        version, path.toAbsolutePath(), CURRENT_CONFIG_VERSION);
++                }
++            } else {
++                versionNode.set(CURRENT_CONFIG_VERSION);
++            }
++
++            // Set file header comments
++            root.comment("""
++                Worlds Settings Configuration
++                Configures storage region formats (MCA vs Linear) and automatic startup conversion.
++                """);
++
++            // Defaults section
++            final CommentedConfigurationNode defaultsNode = root.node("defaults");
++            defaultsNode.comment("""
++                Default region format settings applied to all worlds unless overridden below.
++                """);
++
++            final CommentedConfigurationNode defaultFormatNode = defaultsNode.node("region-format");
++            if (defaultFormatNode.virtual()) {
++                defaultFormatNode.set("MCA");
++                defaultFormatNode.comment("Storage format: MCA (standard Minecraft anvil format) or LINEAR (Linear v2 format)");
++            }
++
++            final CommentedConfigurationNode defaultCompressionNode = defaultsNode.node("linear-compression-level");
++            if (defaultCompressionNode.virtual()) {
++                defaultCompressionNode.set(3);
++                defaultCompressionNode.comment("Zstandard compression level for Linear format (1-22, recommended: 1-6, default: 3)");
++            }
++
++            final CommentedConfigurationNode defaultConversionNode = defaultsNode.node("conversion");
++            defaultConversionNode.comment("Conversion settings when migrating between MCA and Linear format");
++
++            final CommentedConfigurationNode defaultAutoNode = defaultConversionNode.node("automatic");
++            if (defaultAutoNode.virtual()) {
++                defaultAutoNode.set(false);
++                defaultAutoNode.comment("Automatically convert existing worlds to target format on server startup");
++            }
++
++            final CommentedConfigurationNode defaultCountdownNode = defaultConversionNode.node("countdown-seconds");
++            if (defaultCountdownNode.virtual()) {
++                defaultCountdownNode.set(30);
++                defaultCountdownNode.comment("Safety countdown in seconds before conversion begins (abortable via Ctrl+C / stop)");
++            }
++
++            final CommentedConfigurationNode defaultBackupNode = defaultConversionNode.node("backup");
++            defaultBackupNode.comment("Backup settings before performing format conversion");
++
++            final CommentedConfigurationNode defaultBackupEnabledNode = defaultBackupNode.node("enabled");
++            if (defaultBackupEnabledNode.virtual()) {
++                defaultBackupEnabledNode.set(true);
++                defaultBackupEnabledNode.comment("Create a full backup of the world folder before converting");
++            }
++
++            final CommentedConfigurationNode defaultBackupDirNode = defaultBackupNode.node("directory");
++            if (defaultBackupDirNode.virtual()) {
++                defaultBackupDirNode.set("backups/world-conversion");
++                defaultBackupDirNode.comment("Directory where world conversion backups are saved");
++            }
++
++            // Worlds overrides section
++            final CommentedConfigurationNode worldsNode = root.node("worlds");
++            if (worldsNode.virtual()) {
++                worldsNode.comment("""
++                    World-specific overrides. Key is the actual world folder name (e.g. 'world', 'world_nether', 'world_the_end').
++                    Example:
++                      world:
++                        region-format: LINEAR
++                        conversion:
++                          automatic: true
++                    """);
++            }
++
++            // Parse defaults
++            final RegionFormat defaultFormat = RegionFormat.fromString(defaultFormatNode.getString("MCA"));
++            final int defaultCompression = Math.max(1, Math.min(22, defaultCompressionNode.getInt(3)));
++            final boolean defaultAuto = defaultAutoNode.getBoolean(false);
++            final int defaultCountdown = Math.max(0, defaultCountdownNode.getInt(30));
++            final boolean defaultBackupEnabled = defaultBackupEnabledNode.getBoolean(true);
++            final String defaultBackupDir = defaultBackupDirNode.getString("backups/world-conversion");
++
++            final ConversionSettings defaultConv = new ConversionSettings(defaultAuto, defaultCountdown, defaultBackupEnabled, defaultBackupDir);
++            final WorldFormatSetting defaultSetting = new WorldFormatSetting(defaultFormat, defaultCompression, defaultConv);
++
++            // Parse world overrides
++            final Map<String, WorldFormatSetting> parsedWorlds = new HashMap<>();
++            if (!worldsNode.virtual() && worldsNode.isMap()) {
++                for (final Map.Entry<Object, ? extends ConfigurationNode> entry : worldsNode.childrenMap().entrySet()) {
++                    final String worldName = String.valueOf(entry.getKey());
++                    final ConfigurationNode wNode = entry.getValue();
++
++                    final RegionFormat wFormat = wNode.node("region-format").virtual()
++                        ? defaultFormat
++                        : RegionFormat.fromString(wNode.node("region-format").getString());
++
++                    final int wCompression = wNode.node("linear-compression-level").virtual()
++                        ? defaultCompression
++                        : Math.max(1, Math.min(22, wNode.node("linear-compression-level").getInt(defaultCompression)));
++
++                    final ConfigurationNode wConvNode = wNode.node("conversion");
++                    final boolean wAuto = wConvNode.node("automatic").virtual()
++                        ? defaultAuto
++                        : wConvNode.node("automatic").getBoolean(defaultAuto);
++
++                    final int wCountdown = wConvNode.node("countdown-seconds").virtual()
++                        ? defaultCountdown
++                        : Math.max(0, wConvNode.node("countdown-seconds").getInt(defaultCountdown));
++
++                    final ConfigurationNode wBackupNode = wConvNode.node("backup");
++                    final boolean wBackupEnabled = wBackupNode.node("enabled").virtual()
++                        ? defaultBackupEnabled
++                        : wBackupNode.node("enabled").getBoolean(defaultBackupEnabled);
++
++                    final String wBackupDir = wBackupNode.node("directory").virtual()
++                        ? defaultBackupDir
++                        : wBackupNode.node("directory").getString(defaultBackupDir);
++
++                    final ConversionSettings wConv = new ConversionSettings(wAuto, wCountdown, wBackupEnabled, wBackupDir);
++                    parsedWorlds.put(worldName, new WorldFormatSetting(wFormat, wCompression, wConv));
++                }
++            }
++
++            // Safe atomic write if newly created or missing default keys were added
++            safeSave(loader, root, path);
++
++            instance = new WorldsSettings(path, defaultSetting, parsedWorlds);
++            return instance;
++        } catch (final Exception ex) {
++            LOGGER.error("Failed to load worlds-settings.yml at {}", path.toAbsolutePath(), ex);
++            throw new RuntimeException("Failed to load worlds-settings.yml: " + ex.getMessage(), ex);
++        }
++    }
++
++    private static void safeSave(final YamlConfigurationLoader loader, final ConfigurationNode root, final Path targetPath) {
++        final Path tempPath = targetPath.resolveSibling(targetPath.getFileName().toString() + ".tmp");
++        try {
++            final YamlConfigurationLoader tempLoader = YamlConfigurationLoader.builder()
++                .path(tempPath)
++                .nodeStyle(NodeStyle.BLOCK)
++                .headerMode(HeaderMode.PRESET)
++                .indent(2)
++                .build();
++            tempLoader.save(root);
++
++            try {
++                Files.move(tempPath, targetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
++            } catch (final AtomicMoveNotSupportedException ex) {
++                Files.move(tempPath, targetPath, StandardCopyOption.REPLACE_EXISTING);
++            }
++        } catch (final IOException ex) {
++            LOGGER.error("Failed to safely write configuration to {}", targetPath.toAbsolutePath(), ex);
++            try {
++                Files.deleteIfExists(tempPath);
++            } catch (final IOException ignored) {}
++        }
++    }
++
++    public WorldFormatSetting getDefaults() {
++        return this.defaults;
++    }
++
++    public WorldFormatSetting getForWorld(final String worldName) {
++        if (worldName != null && this.worldSettings.containsKey(worldName)) {
++            return this.worldSettings.get(worldName);
++        }
++        return this.defaults;
++    }
++
++    public WorldFormatSetting getForPath(final Path folder) {
++        return this.resolvedPathCache.computeIfAbsent(folder, f -> {
++            // Check folder name and parent folders against worldSettings
++            Path curr = f;
++            while (curr != null) {
++                final Path fileName = curr.getFileName();
++                if (fileName != null) {
++                    final String name = fileName.toString();
++                    if (this.worldSettings.containsKey(name)) {
++                        return this.worldSettings.get(name);
++                    }
++                }
++                curr = curr.getParent();
++            }
++            return this.defaults;
++        });
++    }
++
++    public Map<String, WorldFormatSetting> getWorldSettings() {
++        return this.worldSettings;
++    }
++}
+\ No newline at end of file
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 4dbddb7fbd9019c675b27d544daba3292981584c..5a6540eee2d4c7f34153806dd48acfa3a3f9b3ca 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -640,6 +640,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             && JvmProfiler.INSTANCE.start(Environment.from(this));
+         ProfiledDuration profiledDuration = JvmProfiler.INSTANCE.onWorldLoadedStarted();
+         // Paper start - rework world loading process
++        // Paper start - Linear world format check and conversion
++        io.papermc.paper.linear.WorldsSettings.load(((java.io.File) this.options.valueOf("paper-settings-directory")).toPath());
++        io.papermc.paper.linear.WorldFormatConverter.runStartupCheck(this);
++        // Paper end - Linear world format check and conversion
+         io.papermc.paper.world.PaperWorldLoader loader = io.papermc.paper.world.PaperWorldLoader.create(this, levelId);
+         loader.loadInitialWorlds();
+         // Paper end - rework world loading process
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
+index 3de7fd2b084c38e72d7a6bc416880a881f514ad3..8ae2be8c1939418e8e04c95e4275a4518c5365f1 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFile.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
+@@ -130,7 +130,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         return this.recalculateCount.get();
+     }
+ 
+-    boolean recalculateHeader() throws IOException {
++    public boolean recalculateHeader() throws IOException {
+         if (!this.canRecalcHeader) {
+             return false;
+         }
+@@ -405,7 +405,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+ 
+     // Paper start - rewrite chunk system
+     @Override
+-    public final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(final net.minecraft.nbt.CompoundTag data, final ChunkPos pos) throws IOException {
++    public ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(final net.minecraft.nbt.CompoundTag data, final ChunkPos pos) throws IOException {
+         final RegionFile.ChunkBuffer buffer = ((RegionFile)(Object)this).new ChunkBuffer(pos);
+         ((ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemChunkBuffer)buffer).moonrise$setWriteOnClose(false);
+ 
+@@ -418,6 +418,17 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+     }
+     // Paper end - rewrite chunk system
+ 
++    protected RegionFile(final RegionStorageInfo info, final Path path) {
++        this.info = info;
++        this.path = path;
++        this.version = null;
++        this.externalFileDir = null;
++        this.file = null;
++        this.offsets = null;
++        this.timestamps = null;
++        this.canRecalcHeader = false;
++    }
++
+     public RegionFile(final RegionStorageInfo info, final Path path, final Path externalFileDir, final boolean sync) throws IOException {
+         this(info, path, externalFileDir, RegionFileVersion.getSelected(), sync);
+     }
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 63b40c420030d935bb81a219fb33defe0946e21f..2a48f57e02434e3d67e44e6f35b6d270e976df81 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -30,7 +30,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     @Nullable
+     public static ChunkPos getRegionFileCoordinates(Path file) {
+         String fileName = file.getFileName().toString();
+-        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
++        if (!fileName.startsWith("r.") || (!fileName.endsWith(".mca") && !fileName.endsWith(".linear"))) {
+             return null;
+         }
+ 
+@@ -54,8 +54,19 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     private static final int REGION_SHIFT = 5;
+     private static final int MAX_NON_EXISTING_CACHE = 1024 * 4;
+     private final it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet nonExistingRegionFiles = new it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet();
+-    private static String getRegionFileName(final int chunkX, final int chunkZ) {
+-        return "r." + (chunkX >> REGION_SHIFT) + "." + (chunkZ >> REGION_SHIFT) + ".mca";
++    private String getRegionFileName(final int chunkX, final int chunkZ) {
++        final io.papermc.paper.linear.WorldsSettings settings = io.papermc.paper.linear.WorldsSettings.get();
++        final String ext = (settings != null) ? settings.getForPath(this.folder).regionFormat().extension() : ANVIL_EXTENSION;
++        return "r." + (chunkX >> REGION_SHIFT) + "." + (chunkZ >> REGION_SHIFT) + ext;
++    }
++
++    private RegionFile createRegionFileInstance(final Path regionPath) throws IOException {
++        final io.papermc.paper.linear.WorldsSettings settings = io.papermc.paper.linear.WorldsSettings.get();
++        final io.papermc.paper.linear.WorldsSettings.WorldFormatSetting setting = (settings != null) ? settings.getForPath(this.folder) : null;
++        if (setting != null && setting.regionFormat() == io.papermc.paper.linear.RegionFormat.LINEAR) {
++            return new io.papermc.paper.linear.LinearRegionFileAdapter(this.info, regionPath, this.folder, this.sync, setting.linearCompressionLevel());
++        }
++        return new RegionFile(this.info, regionPath, this.folder, this.sync);
+     }
+ 
+     private boolean doesRegionFilePossiblyExist(final long position) {
+@@ -124,7 +135,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+         FileUtil.createDirectoriesSafe(this.folder);
+ 
+-        ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
++        ret = this.createRegionFileInstance(regionPath);
+ 
+         this.regionCache.putAndMoveToFirst(key, ret);
+ 
+@@ -277,6 +288,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) {
+         this.folder = folder;
+         this.sync = sync;
++        final io.papermc.paper.linear.WorldsSettings settings = io.papermc.paper.linear.WorldsSettings.get();
++        if (settings != null) {
++            io.papermc.paper.linear.WorldFormatConverter.checkAndConvertFolder(folder, settings);
++        }
+         this.info = info;
+         this.isChunkData = info.dfuType()[0] == net.minecraft.util.datafix.DataFixTypes.CHUNK; // Paper - recalculate region file headers
+     }
+@@ -298,7 +313,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             FileUtil.createDirectoriesSafe(this.folder);
+ 
+-            ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
++            ret = this.createRegionFileInstance(regionPath);
+ 
+             this.regionCache.putAndMoveToFirst(key, ret);
+ 

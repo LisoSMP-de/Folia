@@ -49,6 +49,7 @@
  dependencies {
 -    implementation(project(":paper-api"))
 +    implementation(project(":folia-api"))
++    implementation("com.github.luben:zstd-jni:1.5.7-11")
      implementation("ca.spottedleaf:leafpile:1.2.0")
      implementation("org.jline:jline-terminal-ffm:3.27.1") // use ffm on java 22+
      implementation("org.jline:jline-terminal-jni:3.27.1") // fall back to jni on java 21
