@@ -65,10 +65,10 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..e8f5ee93dcfe4501f42af9f2e199618ac440ec50
+index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb34e1412a
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,656 @@
+@@ -0,0 +1,653 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.common.time.TickData;
@@ -523,7 +523,7 @@ index 0000000000000000000000000000000000000000..e8f5ee93dcfe4501f42af9f2e199618a
 +            }
 +        }
 +        if (!warnedTempFail) {
-+            LOGGER.warning("[FoliaStatusBars] CPU temperature unavailable on Windows (WMI MSAcpi_ThermalZoneTemperature not supported or requires elevated privileges). Displaying N/A.");
++            LOGGER.warning("[FoliaStatusBars] CPU temperature unavailable on Windows (WMI MSAcpi_ThermalZoneTemperature not supported or requires elevated privileges).");
 +            warnedTempFail = true;
 +        }
 +        return Double.NaN;
@@ -659,12 +659,9 @@ index 0000000000000000000000000000000000000000..e8f5ee93dcfe4501f42af9f2e199618a
 +                sb.append("<dark_gray>N/A</dark_gray>");
 +            }
 +            final double tempC = readCpuTempC();
-+            sb.append(" Temp<gray>:</gray> ");
 +            if (!Double.isNaN(tempC)) {
 +                final String gT = tempGradient(tempC);
-+                sb.append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
-+            } else {
-+                sb.append("<dark_gray>N/A</dark_gray>");
++                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
 +            }
 +            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
 +            return;
