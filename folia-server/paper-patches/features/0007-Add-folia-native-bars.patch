@@ -68,10 +68,11 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb34e1412a
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,653 @@
+@@ -0,0 +1,716 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.common.time.TickData;
++import java.lang.management.BufferPoolMXBean;
 +import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 +import java.lang.management.ManagementFactory;
 +import java.lang.management.MemoryUsage;
@@ -278,9 +279,46 @@ index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb
 +        return GRAD_RED;
 +    }
 +    private static String memGradient(final double ratio) {
++        if (ratio > 1.0D) return GRAD_PURPLE;
 +        if (ratio <= 0.50D) return GRAD_GREEN;
 +        if (ratio <= 0.70D) return GRAD_YELLOW;
 +        return GRAD_RED;
++    }
++    private static String directGradient(final long bytes) {
++        if (bytes <= 536_870_912L) return GRAD_GREEN;
++        if (bytes <= 1_610_612_736L) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String nonHeapGradient(final long bytes) {
++        if (bytes <= 367_001_600L) return GRAD_GREEN;
++        if (bytes <= 524_288_000L) return GRAD_YELLOW;
++        return GRAD_RED;
++    }
++    private static String formatMemoryBytes(final long bytes) {
++        final long safeBytes = Math.max(0L, bytes);
++        if (safeBytes >= 1073741824L) {
++            return String.format(Locale.ROOT, "%.2fGB", safeBytes / 1073741824.0D);
++        }
++        return String.format(Locale.ROOT, "%.0fMB", safeBytes / 1048576.0D);
++    }
++    private static long readNettyDirectMemory() {
++        long nettyDirect = 0L;
++        try {
++            final long val = io.netty.util.internal.PlatformDependent.usedDirectMemory();
++            if (val > 0L) {
++                nettyDirect = val;
++            }
++        } catch (final Throwable ignored) {}
++        long bufferPoolDirect = 0L;
++        try {
++            for (final BufferPoolMXBean pool : ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class)) {
++                if ("direct".equalsIgnoreCase(pool.getName())) {
++                    bufferPoolDirect = Math.max(0L, pool.getMemoryUsed());
++                    break;
++                }
++            }
++        } catch (final Throwable ignored) {}
++        return Math.max(nettyDirect, bufferPoolDirect);
 +    }
 +    private static String tpsGradient(final double tps) {
 +        if (tps >= 18) return GRAD_GREEN;
@@ -668,14 +706,39 @@ index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb
 +        }
 +        if (type == BarType.MEMORY) {
 +            final MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
-+            final long used = heap.getUsed();
-+            final long max = heap.getMax();
-+            final double percent = Math.clamp((double) used / max, 0.0, 1.0);
-+            final String gUsed = memGradient(percent);
-+            final String usedStr = gUsed + String.format(Locale.ROOT, "%.2fGB", used / 1073741824.0D) + GRAD_END;
-+            final String maxStr = GRAD_GREEN + String.format(Locale.ROOT, "%.2fGB", max / 1073741824.0D) + GRAD_END;
-+            final Component msg = mm.deserialize("<gray>Memory usage<gray>:</gray> " + usedStr + "<yellow>/</yellow>" + maxStr);
-+            bar.name(msg).progress((float) percent).color(barColorForGrad(gUsed));
++            final long heapUsed = Math.max(0L, heap.getUsed());
++            final long heapMax = heap.getMax() > 0L ? heap.getMax() : Math.max(heapUsed, heap.getCommitted());
++            final long safeMax = Math.max(1L, heapMax);
++
++            final long nettyDirect = readNettyDirectMemory();
++            final MemoryUsage nonHeap = ManagementFactory.getMemoryMXBean().getNonHeapMemoryUsage();
++            final long nonHeapUsed = Math.max(0L, nonHeap.getUsed());
++
++            final long totalUsed = heapUsed + nettyDirect + nonHeapUsed;
++            final double totalRatio = (double) totalUsed / (double) safeMax;
++            final double heapRatio = (double) heapUsed / (double) safeMax;
++
++            final String gTotal = memGradient(totalRatio);
++            final String gHeap = memGradient(heapRatio);
++            final String gNetty = directGradient(nettyDirect);
++            final String gNonHeap = nonHeapGradient(nonHeapUsed);
++
++            final String totalStr = gTotal + formatMemoryBytes(totalUsed) + GRAD_END;
++            final String maxStr = GRAD_GREEN + formatMemoryBytes(safeMax) + GRAD_END;
++            final String percentStr = gTotal + String.format(Locale.ROOT, "%.0f%%", totalRatio * 100.0D) + GRAD_END;
++
++            final String heapStr = gHeap + formatMemoryBytes(heapUsed) + GRAD_END;
++            final String nettyStr = gNetty + formatMemoryBytes(nettyDirect) + GRAD_END;
++            final String nonHeapStr = gNonHeap + formatMemoryBytes(nonHeapUsed) + GRAD_END;
++
++            final Component msg = mm.deserialize(
++                "<gray>Mem<gray>:</gray> " + totalStr + "<yellow>/</yellow>" + maxStr + " (" + percentStr + ")"
++                + " <gray>Heap<gray>:</gray> " + heapStr
++                + " <gray>Netty<gray>:</gray> " + nettyStr
++                + " <gray>Non-Heap<gray>:</gray> " + nonHeapStr
++            );
++            final float progress = (float) Math.clamp(totalRatio, 0.0D, 1.0D);
++            bar.name(msg).progress(progress).color(barColorForGrad(gTotal));
 +            return;
 +        }
 +        final ThreadedRegionizer.ThreadedRegion<TickRegions.TickRegionData, TickRegions.TickRegionSectionData> region = TickRegionScheduler.getCurrentRegion();
