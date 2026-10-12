@@ -65,7 +65,7 @@ index 0000000000000000000000000000000000000000..c89bbb78f6d7543e9b53fb05675d9e96
 +}
 diff --git a/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb34e1412a
+index 0000000000000000000000000000000000000000..6f1fe73cca9d41d442fdb661796af04e06a1d7b5
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
 @@ -0,0 +1,681 @@
@@ -337,8 +337,8 @@ index 0000000000000000000000000000000000000000..d27bbe82ca3eff13723c57b7d411f2bb
 +        return GRAD_RED;
 +    }
 +    private static String clockGradient(final double clockGhz) {
-+        if (clockGhz >= 4.0D) return GRAD_GREEN;
-+        if (clockGhz >= 2.5D) return GRAD_YELLOW;
++        if (clockGhz >= 2.5D) return GRAD_GREEN;
++        if (clockGhz >= 2.0D) return GRAD_YELLOW;
 +        return GRAD_RED;
 +    }
 +    private static BossBar.Color barColorForGrad(final String grad) {
