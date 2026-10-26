@@ -112,3 +112,71 @@ tasks.register("printPaperVersion") {
         println(project.version)
     }
 }
+
+tasks.register("buildAllVersions") {
+    group = "folia"
+    description = "Builds paperclip jars for ver/26.3.x, ver/26.2.x, and ver/1.21.11 using git worktrees."
+    doLast {
+        val branches = listOf("ver/26.3.x", "ver/26.2.x", "ver/1.21.11")
+        val rootDir = rootProject.projectDir
+        val worktreeDir = rootDir.resolve(".build-worktrees")
+        if (worktreeDir.exists()) {
+            worktreeDir.deleteRecursively()
+        }
+        worktreeDir.mkdirs()
+
+        val isWin = org.gradle.internal.os.OperatingSystem.current().isWindows
+
+        try {
+            for (branch in branches) {
+                println("=== Building branch: $branch ===")
+                val targetDir = worktreeDir.resolve(branch.replace('/', '_'))
+
+                val worktreeBuilder = ProcessBuilder("git", "worktree", "add", targetDir.absolutePath, branch)
+                worktreeBuilder.directory(rootDir)
+                worktreeBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT)
+                worktreeBuilder.redirectError(ProcessBuilder.Redirect.INHERIT)
+                val wtProcess = worktreeBuilder.start()
+                if (wtProcess.waitFor() != 0) {
+                    throw GradleException("Failed to create git worktree for $branch")
+                }
+
+                val gradlewPath = targetDir.resolve(if (isWin) "gradlew.bat" else "./gradlew").absolutePath
+                val buildCommand = if (isWin) listOf("cmd.exe", "/c", gradlewPath, "applyAllPatches", "createPaperclipJar", "--stacktrace")
+                                   else listOf(gradlewPath, "applyAllPatches", "createPaperclipJar", "--stacktrace")
+
+                val buildBuilder = ProcessBuilder(buildCommand)
+                buildBuilder.directory(targetDir)
+                buildBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT)
+                buildBuilder.redirectError(ProcessBuilder.Redirect.INHERIT)
+                val buildProcess = buildBuilder.start()
+                if (buildProcess.waitFor() != 0) {
+                    throw GradleException("Failed to build $branch")
+                }
+                println("=== Successfully built $branch ===")
+            }
+        } finally {
+            println("Cleaning up worktrees...")
+            for (branch in branches) {
+                val targetDir = worktreeDir.resolve(branch.replace('/', '_'))
+                if (targetDir.exists()) {
+                    try {
+                        ProcessBuilder("git", "worktree", "remove", "--force", targetDir.absolutePath)
+                            .directory(rootDir)
+                            .start()
+                            .waitFor()
+                    } catch (e: Exception) {
+                        // ignore cleanup errors
+                    }
+                }
+            }
+            worktreeDir.deleteRecursively()
+        }
+    }
+}
+
+tasks.register("buildAll") {
+    group = "folia"
+    description = "Alias for buildAllVersions"
+    dependsOn("buildAllVersions")
+}
