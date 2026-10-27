@@ -12410,7 +12410,7 @@ index ea4cc487002a0edc54cc49bfbecf72be156b6af7..e599ded5301efd4de7f4fa05c0498ae5
  
      private static long currentLagCompensationTick() {
 diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
-index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95b0dd596f 100644
+index bd87f103f738448f848011963da2c300b5f15676..562f7a4984860bc14a30258cc41847ae08b54a56 100644
 --- a/net/minecraft/server/level/ServerPlayer.java
 +++ b/net/minecraft/server/level/ServerPlayer.java
 @@ -212,7 +212,7 @@ import org.slf4j.Logger;
@@ -12584,7 +12584,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
          }
  
          this.respawnConfig = input.read("respawn", ServerPlayer.RespawnConfig.CODEC).orElse(null);
-@@ -647,10 +791,16 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -654,10 +798,16 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
              ServerLevel pearlLevel = this.level().getServer().getLevel(pearlLevelKey.get());
              if (pearlLevel != null) {
                  Entity pearl = EntityType.loadEntityRecursive(
@@ -12604,7 +12604,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
                  } else {
                      LOGGER.warn("Failed to spawn player ender pearl in level ({}), skipping", pearlLevelKey.get());
                  }
-@@ -753,12 +903,23 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -760,12 +910,23 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
  
          Entity camera = this.getCamera();
          if (camera != this) {
@@ -12629,7 +12629,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
              } else {
                  this.setCamera(this);
              }
-@@ -902,9 +1063,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -909,9 +1070,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
                  this.oldLevel = this.experienceLevel;
              }
  
@@ -12640,7 +12640,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
              // CraftBukkit end
          } catch (Throwable t) {
              CrashReport report = CrashReport.forThrowable(t, "Ticking player");
-@@ -1531,8 +1690,326 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -1538,8 +1697,326 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
          }
      }
  
@@ -12967,7 +12967,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
          if (this.isSleeping()) return null; // CraftBukkit - SPIGOT-3154
          if (this.isRemoved()) {
              return null;
-@@ -2595,7 +3072,30 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -2602,7 +3079,30 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
          return this.camera == null ? this : this.camera;
      }
  
@@ -12998,7 +12998,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
          Entity oldCamera = this.getCamera();
          this.camera = newCamera == null ? this : newCamera;
          if (oldCamera != this.camera) {
-@@ -2614,16 +3114,19 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -2621,16 +3121,19 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
                  }
              }
              // Paper end - Add PlayerStartSpectatingEntityEvent and PlayerStopSpectatingEntity
@@ -13025,7 +13025,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
          }
      }
  
-@@ -2966,11 +3469,11 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -2973,11 +3476,11 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
      }
  
      public void registerEnderPearl(final ThrownEnderpearl enderPearl) {
@@ -13039,7 +13039,7 @@ index 1137be30f125cb79f05f3e5c104cdf8cca979ff1..f951dc9dde3a436cd14ce3682e8aad95
      }
  
      public Set<ThrownEnderpearl> getEnderPearls() {
-@@ -3172,7 +3675,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+@@ -3179,7 +3682,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
          this.experienceLevel = this.newLevel;
          this.totalExperience = this.newTotalExp;
          this.experienceProgress = 0;

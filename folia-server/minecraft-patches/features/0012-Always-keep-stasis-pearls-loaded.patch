@@ -39,10 +39,10 @@ index aa53138b3670a8337b639472a6ab5ce46702ff76..1073d41b9324eab60f0059f45e3b54eb
          ((ChunkSystemServerLevel)this.serverWorld).moonrise$getChunkTaskScheduler().chunkHolderManager
              .removeTicketAtLevel(ENDER_PEARL_TICKER, coordinate, ChunkHolderManager.ENTITY_TICKING_TICKET_LEVEL, Integer.valueOf(entityId)); // Folia - region threading
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index d0dba5cc351903fb762e231a95f302479794185f..f00df593ca6808c562e6748905be20d1837fb3ec 100644
+index 4516bfad2d1907c6161fbf0bf2105efb5ce5228c..f7cd44991d788a94263b15425e8c3014a12c6ccd 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -264,6 +264,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -262,6 +262,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
              int previousChunkZ = SectionPos.blockToSectionCoord(this.position().z());
              Entity owner = this.owner != null ? findOwnerIncludingDeadPlayer(serverLevel, this.owner.getUUID()) : null;
              if (owner instanceof ServerPlayer serverPlayer

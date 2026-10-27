@@ -5,12 +5,25 @@ Subject: [PATCH] Add Linear region format support with worlds-settings.yml and
  auto-conversion
 
 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/storage/RegionFileRecovery.java b/ca/spottedleaf/moonrise/patches/chunk_system/storage/RegionFileRecovery.java
+index 9fb82b2e917a32c29da72b87bb0fbf730c0682f8..be931c6da5a159e9978dcae916a18e02f65f78ac 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/storage/RegionFileRecovery.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/storage/RegionFileRecovery.java
+@@ -42,7 +42,7 @@ public final class RegionFileRecovery {
+     // returns the lowest chunk coordinate contained in the regionfile
+     public static ChunkPos getRegionFileCoordinates(final Path file) {
+         final String fileName = file.getFileName().toString();
+-        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
++        if (!fileName.startsWith("r.") || (!fileName.endsWith(".mca") && !fileName.endsWith(".linear"))) {
+             return null;
+         }
+ 
 diff --git a/io/papermc/paper/linear/IRegionFile.java b/io/papermc/paper/linear/IRegionFile.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..5230d3206a27dae71b8f7be4376c1f15bf00bbb9
+index 0000000000000000000000000000000000000000..344685bb07d4caa5e9060d120e1edf095acf3566
 --- /dev/null
 +++ b/io/papermc/paper/linear/IRegionFile.java
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,56 @@
 +package io.papermc.paper.linear;
 +
 +import ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile;
@@ -51,8 +64,22 @@ index 0000000000000000000000000000000000000000..5230d3206a27dae71b8f7be4376c1f15
 +    default int getRecalculateCount() {
 +        return 0;
 +    }
++
++    @Override
++    default int moonrise$getRecalculateCount() {
++        return 0;
++    }
++
++    @Override
++    default boolean moonrise$recalculateHeader() throws IOException {
++        return false;
++    }
++
++    @Override
++    default Boolean moonrise$tryRecalcHeader(final int expectedRecalcCount) throws IOException {
++        return Boolean.FALSE;
++    }
 +}
-\ No newline at end of file
 diff --git a/io/papermc/paper/linear/LinearHash.java b/io/papermc/paper/linear/LinearHash.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..8134a756d41da5e939e3f7f1f8a9527d61bfda4b
@@ -811,10 +838,10 @@ index 0000000000000000000000000000000000000000..fd15e14d2a4a42e4541e667fc67642f4
 +}
 diff --git a/io/papermc/paper/linear/LinearRegionFileAdapter.java b/io/papermc/paper/linear/LinearRegionFileAdapter.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..5480b82e9a0966ab70931bd5fcc44a09ab5c1c66
+index 0000000000000000000000000000000000000000..3ff7fbdc378d6206a5916607595f3a6a712d7582
 --- /dev/null
 +++ b/io/papermc/paper/linear/LinearRegionFileAdapter.java
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,83 @@
 +package io.papermc.paper.linear;
 +
 +public final class LinearRegionFileAdapter extends net.minecraft.world.level.chunk.storage.RegionFile {
@@ -884,12 +911,17 @@ index 0000000000000000000000000000000000000000..5480b82e9a0966ab70931bd5fcc44a09
 +    }
 +
 +    @Override
-+    public boolean recalculateHeader() throws java.io.IOException {
++    public boolean moonrise$recalculateHeader() {
 +        return false;
 +    }
 +
 +    @Override
-+    public int getRecalculateCount() {
++    public Boolean moonrise$tryRecalcHeader(final int expectedRecalcCount) {
++        return Boolean.FALSE;
++    }
++
++    @Override
++    public int moonrise$getRecalculateCount() {
 +        return 0;
 +    }
 +}
@@ -2248,10 +2280,10 @@ index 0000000000000000000000000000000000000000..30c6bdb2e2129b6477008452c87774f6
 +}
 \ No newline at end of file
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 4dbddb7fbd9019c675b27d544daba3292981584c..5a6540eee2d4c7f34153806dd48acfa3a3f9b3ca 100644
+index 61bd5eaf576e418ad517f268d5f638ef4549d038..86555c21e1e19f54a0fac5472aeaea02baa62c3b 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -640,6 +640,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -634,6 +634,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
              && JvmProfiler.INSTANCE.start(Environment.from(this));
          ProfiledDuration profiledDuration = JvmProfiler.INSTANCE.onWorldLoadedStarted();
          // Paper start - rework world loading process
@@ -2263,28 +2295,52 @@ index 4dbddb7fbd9019c675b27d544daba3292981584c..5a6540eee2d4c7f34153806dd48acfa3
          loader.loadInitialWorlds();
          // Paper end - rework world loading process
 diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
-index 3de7fd2b084c38e72d7a6bc416880a881f514ad3..8ae2be8c1939418e8e04c95e4275a4518c5365f1 100644
+index bd4b488cdf7a386bc458fad2ae659b77e60962ad..39dd614a5f0d45abdd67ff2010ea01045942a92b 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFile.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
-@@ -130,7 +130,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+@@ -60,7 +60,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+ 
+     private boolean canRecalcHeader() {
+         // only chunk data has an embedded position and timestamp we can use to locate data
+-        return ca.spottedleaf.moonrise.patches.chunk_system.storage.RegionFileRecovery.isChunkStorage(this.info) && ca.spottedleaf.moonrise.patches.chunk_system.storage.RegionFileRecovery.getRegionFileCoordinates(this.path) != null;
++        return this.file != null && ca.spottedleaf.moonrise.patches.chunk_system.storage.RegionFileRecovery.isChunkStorage(this.info) && ca.spottedleaf.moonrise.patches.chunk_system.storage.RegionFileRecovery.getRegionFileCoordinates(this.path) != null;
+     }
+ 
+     private int readFully(final ByteBuffer buffer, long position) throws IOException {
+@@ -179,12 +179,12 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+     }
+ 
+     @Override
+-    public final int moonrise$getRecalculateCount() {
++    public int moonrise$getRecalculateCount() {
          return this.recalculateCount.get();
      }
  
--    boolean recalculateHeader() throws IOException {
-+    public boolean recalculateHeader() throws IOException {
-         if (!this.canRecalcHeader) {
+     @Override
+-    public final @Nullable Boolean moonrise$tryRecalcHeader(final int expectedRecalcCount) throws IOException {
++    public @Nullable Boolean moonrise$tryRecalcHeader(final int expectedRecalcCount) throws IOException {
+         if (!this.canRecalcHeader()) {
+             return Boolean.FALSE;
+         }
+@@ -206,7 +206,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+      * them all.
+      */
+     @Override
+-    public final boolean moonrise$recalculateHeader() throws IOException {
++    public boolean moonrise$recalculateHeader() throws IOException {
+         if (!this.canRecalcHeader()) {
              return false;
          }
-@@ -405,7 +405,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+@@ -418,7 +418,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+     }
  
-     // Paper start - rewrite chunk system
      @Override
 -    public final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(final net.minecraft.nbt.CompoundTag data, final ChunkPos pos) throws IOException {
 +    public ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(final net.minecraft.nbt.CompoundTag data, final ChunkPos pos) throws IOException {
          final RegionFile.ChunkBuffer buffer = ((RegionFile)(Object)this).new ChunkBuffer(pos);
          ((ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemChunkBuffer)buffer).moonrise$setWriteOnClose(false);
  
-@@ -418,6 +418,17 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+@@ -431,6 +431,16 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
      }
      // Paper end - rewrite chunk system
  
@@ -2296,26 +2352,16 @@ index 3de7fd2b084c38e72d7a6bc416880a881f514ad3..8ae2be8c1939418e8e04c95e4275a451
 +        this.file = null;
 +        this.offsets = null;
 +        this.timestamps = null;
-+        this.canRecalcHeader = false;
 +    }
 +
      public RegionFile(final RegionStorageInfo info, final Path path, final Path externalFileDir, final boolean sync) throws IOException {
          this(info, path, externalFileDir, RegionFileVersion.getSelected(), sync);
      }
 diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-index 63b40c420030d935bb81a219fb33defe0946e21f..aa095e825ca0573cdaf2fb60d0afbd8659f36296 100644
+index 7e815fee19ab2c283bf1fdc3d6a530d4101de3de..1bbef1b066c604877f11862d0384c5fc11dc4b03 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-@@ -30,7 +30,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
-     @Nullable
-     public static ChunkPos getRegionFileCoordinates(Path file) {
-         String fileName = file.getFileName().toString();
--        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
-+        if (!fileName.startsWith("r.") || (!fileName.endsWith(".mca") && !fileName.endsWith(".linear"))) {
-             return null;
-         }
- 
-@@ -54,8 +54,19 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -31,8 +31,19 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      private static final int REGION_SHIFT = 5;
      private static final int MAX_NON_EXISTING_CACHE = 1024 * 4;
      private final it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet nonExistingRegionFiles = new it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet();
@@ -2337,16 +2383,7 @@ index 63b40c420030d935bb81a219fb33defe0946e21f..aa095e825ca0573cdaf2fb60d0afbd86
      }
  
      private boolean doesRegionFilePossiblyExist(final long position) {
-@@ -124,7 +135,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
- 
-         FileUtil.createDirectoriesSafe(this.folder);
- 
--        ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
-+        ret = this.createRegionFileInstance(regionPath);
- 
-         this.regionCache.putAndMoveToFirst(key, ret);
- 
-@@ -269,6 +280,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -223,6 +234,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      public RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) {
          this.folder = folder;
          this.sync = sync;
@@ -2355,14 +2392,14 @@ index 63b40c420030d935bb81a219fb33defe0946e21f..aa095e825ca0573cdaf2fb60d0afbd86
 +            io.papermc.paper.linear.WorldFormatConverter.checkAndConvertFolder(folder, settings);
 +        }
          this.info = info;
-         this.isChunkData = info.dfuType()[0] == net.minecraft.util.datafix.DataFixTypes.CHUNK; // Paper - recalculate region file headers
      }
-@@ -298,7 +313,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+@@ -268,7 +283,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
  
              FileUtil.createDirectoriesSafe(this.folder);
  
--            ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
-+            ret = this.createRegionFileInstance(regionPath);
+-            final RegionFile ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
++            final RegionFile ret = this.createRegionFileInstance(regionPath);
  
-             this.regionCache.putAndMoveToFirst(key, ret);
+             this.regionCache.putAndMoveToFirst(key, Optional.of(ret));
  
