@@ -1,0 +1,23 @@
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -510,6 +_,10 @@
+         this.loadGameTypes(input); // Paper - Expand PlayerGameModeChangeEvent
+         this.setShoulderEntityLeft(input.read("ShoulderEntityLeft", CompoundTag.CODEC).orElseGet(CompoundTag::new));
+         this.setShoulderEntityRight(input.read("ShoulderEntityRight", CompoundTag.CODEC).orElseGet(CompoundTag::new));
++        int playTime = input.getIntOr("PlayTime", input.getIntOr("playtime", input.getIntOr("PlayOneMinute", 0)));
++        if (playTime > 0 && this.stats != null) {
++            this.stats.setValue(this, Stats.CUSTOM.get(Stats.PLAY_TIME), playTime);
++        }
+     }
+ 
+     // Paper start - Expand PlayerGameModeChangeEvent
+@@ -550,6 +_,9 @@
+ 
+         if (!this.getShoulderEntityRight().isEmpty()) {
+             output.store("ShoulderEntityRight", CompoundTag.CODEC, this.getShoulderEntityRight());
++        }
++        if (this.stats != null) {
++            output.putInt("PlayTime", this.stats.getValue(Stats.CUSTOM.get(Stats.PLAY_TIME)));
+         }
+         this.getBukkitEntity().setExtraData(output); // CraftBukkit
+     }
