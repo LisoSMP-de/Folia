@@ -147,6 +147,12 @@ jobs:
           path: release-jars
           merge-multiple: true
 
+      - name: Delete Old Release and Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete 26.3-latest --yes --cleanup-tag || true
+
       - name: Release All Jars
         uses: softprops/action-gh-release@v2
         with:
