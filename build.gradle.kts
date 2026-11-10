@@ -119,6 +119,12 @@ tasks.register("buildAllVersions") {
     doLast {
         val branches = listOf("ver/26.3.x", "ver/26.2.x", "ver/1.21.11")
         val rootDir = rootProject.projectDir
+        val releaseDir = rootDir.resolve("release-jars")
+        if (releaseDir.exists()) {
+            releaseDir.deleteRecursively()
+        }
+        releaseDir.mkdirs()
+
         val worktreeDir = rootDir.resolve(".build-worktrees")
         if (worktreeDir.exists()) {
             worktreeDir.deleteRecursively()
