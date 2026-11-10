@@ -1,4 +1,4 @@
-name: Build All Versions
+name: Build All Versions and Release
 
 on:
   push:
@@ -16,34 +16,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - branch: ver/26.3.x
-            tag_name: 26.3-latest
-            release_name: "Folia 26.3 Latest"
-            build_task: createPaperclipJar
-            file_pattern: "folia-server/build/libs/folia-paperclip-*.jar"
-            make_latest: true
-          - branch: ver/26.2.x
-            tag_name: 26.2-latest
-            release_name: "Folia 26.2 Latest"
-            build_task: createPaperclipJar
-            file_pattern: "folia-server/build/libs/folia-paperclip-*.jar"
-            make_latest: false
-          - branch: ver/1.21.11
-            tag_name: 1.21.11-latest
-            release_name: "Folia 1.21.11 Latest"
-            build_task: createMojmapPaperclipJar
-            file_pattern: "folia-server/build/libs/folia-paperclip-*-mojmap.jar"
-            make_latest: false
+    timeout-minutes: 120
     steps:
       - name: Checkout Git Repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ matrix.branch }}
           fetch-depth: 0
 
       - name: Set up JDK 25
@@ -60,17 +37,14 @@ jobs:
           git config --global user.email "actions@github.com"
           git config --global user.name "Github Actions"
 
-      - name: Apply Patches
-        run: ./gradlew applyAllPatches --stacktrace
+      - name: Build All Versions
+        run: ./gradlew buildAll --stacktrace
 
-      - name: Build Paperclip
-        run: ./gradlew ${{ matrix.build_task }} --stacktrace || ./gradlew createPaperclipJar --stacktrace || ./gradlew createMojmapPaperclipJar --stacktrace
-
-      - name: Release
+      - name: Release All Jars
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ matrix.tag_name }}
-          name: ${{ matrix.release_name }}
-          files: ${{ matrix.file_pattern }}
-          make_latest: ${{ matrix.make_latest }}
+          tag_name: 26.3-latest
+          name: "Folia 26.3 Latest"
+          files: release-jars/*
+          make_latest: true
           overwrite: true

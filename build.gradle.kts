@@ -142,8 +142,9 @@ tasks.register("buildAllVersions") {
                 }
 
                 val gradlewPath = targetDir.resolve(if (isWin) "gradlew.bat" else "./gradlew").absolutePath
-                val buildCommand = if (isWin) listOf("cmd.exe", "/c", gradlewPath, "applyAllPatches", "createPaperclipJar", "--stacktrace")
-                                   else listOf(gradlewPath, "applyAllPatches", "createPaperclipJar", "--stacktrace")
+                val buildTask = if (branch == "ver/1.21.11") "createMojmapPaperclipJar" else "createPaperclipJar"
+                val buildCommand = if (isWin) listOf("cmd.exe", "/c", gradlewPath, "applyAllPatches", buildTask, "--stacktrace")
+                                   else listOf(gradlewPath, "applyAllPatches", buildTask, "--stacktrace")
 
                 val buildBuilder = ProcessBuilder(buildCommand)
                 buildBuilder.directory(targetDir)
@@ -153,7 +154,25 @@ tasks.register("buildAllVersions") {
                 if (buildProcess.waitFor() != 0) {
                     throw GradleException("Failed to build $branch")
                 }
-                println("=== Successfully built $branch ===")
+
+                val libsDir = targetDir.resolve("folia-server/build/libs")
+                if (libsDir.exists()) {
+                    val jars = libsDir.listFiles { file -> file.name.endsWith(".jar") && file.name.contains("paperclip") }
+                    if (jars != null) {
+                        for (jar in jars) {
+                            val targetName = when (branch) {
+                                "ver/26.3.x" -> "folia-paperclip-26.3.jar"
+                                "ver/26.2.x" -> "folia-paperclip-26.2.jar"
+                                "ver/1.21.11" -> "folia-paperclip-1.21.11.jar"
+                                else -> jar.name
+                            }
+                            jar.copyTo(releaseDir.resolve(targetName), overwrite = true)
+                            println("Copied ${jar.name} to release-jars/$targetName")
+                        }
+                    }
+                }
+
+                println("=== Successfully built and collected $branch ===")
             }
         } finally {
             println("Cleaning up worktrees...")
