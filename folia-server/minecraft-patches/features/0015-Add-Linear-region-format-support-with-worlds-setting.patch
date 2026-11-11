@@ -1025,8 +1025,12 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +    private static final Logger LOGGER = LogUtils.getLogger();
 +    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
 +    private static final String CONVERSION_STATE_FILE = ".conversion-state";
-+    private static final long MAX_ALLOWED_MEMORY_BYTES = (long)(64.0 * 1024 * 1024 * 1024 * 0.8); // 51.2 GB hard ceiling (80% of 64 GB)
-+    private static final long MEMORY_THROTTLE_BYTES = 48L * 1024 * 1024 * 1024;   // 48 GB throttle trigger
++    private static long getMaxAllowedMemory() {
++        return (long) (Runtime.getRuntime().maxMemory() * 0.8);
++    }
++    private static long getMemoryThrottleBytes() {
++        return (long) (Runtime.getRuntime().maxMemory() * 0.8);
++    }
 +
 +    public record WorldFolderTarget(
 +        String worldName,
@@ -1308,7 +1312,8 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +
 +        // Perform conversions
 +        final int threadCount = Math.max(1, Runtime.getRuntime().availableProcessors());
-+        LOGGER.info("Starting format conversion of {} files across {} threads (streaming directly to disk, memory limit: 51.2 GB)...", totalFiles, threadCount);
++        final long maxMbInit = getMaxAllowedMemory() / (1024 * 1024);
++        LOGGER.info("Starting format conversion of {} files across {} threads (streaming directly to disk, memory limit: {} MB / 80% max heap)...", totalFiles, threadCount, maxMbInit);
 +        final long startMs = System.currentTimeMillis();
 +
 +        final ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
@@ -1344,8 +1349,9 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +                            if (success) {
 +                                final int current = convertedCounter.incrementAndGet();
 +                                final long usedMb = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
-+                                LOGGER.info("Progress: {}/{} files converted ({}) [RAM: {} MB / 12288 MB]", current, totalFiles, srcFile.getFileName(), usedMb);
-+                                if (current % 100 == 0 || usedMb > 40000) {
++                                final long maxMb = getMaxAllowedMemory() / (1024 * 1024);
++                                LOGGER.info("Progress: {}/{} files converted ({}) [RAM: {} MB / {} MB]", current, totalFiles, srcFile.getFileName(), usedMb, maxMb);
++                                if (current % 100 == 0 || usedMb > (maxMb * 0.8)) {
 +                                    System.gc();
 +                                }
 +                            } else {
@@ -1395,16 +1401,19 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +
 +    private static void checkMemoryPressure() {
 +        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-+        if (used >= MEMORY_THROTTLE_BYTES) {
-+            LOGGER.warn("Conversion memory pressure detected ({} MB used / 52429 MB limit). Triggering GC and throttling worker threads...", used / (1024 * 1024));
++        long throttleBytes = getMemoryThrottleBytes();
++        if (used >= throttleBytes) {
++            long maxMb = getMaxAllowedMemory() / (1024 * 1024);
++            LOGGER.warn("Conversion memory pressure detected ({} MB used / {} MB limit). Triggering GC and throttling worker threads...", used / (1024 * 1024), maxMb);
 +            System.gc();
 +            try {
 +                Thread.sleep(250);
 +            } catch (final InterruptedException ignored) {}
 +            used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-+            while (used >= MEMORY_THROTTLE_BYTES) {
++            throttleBytes = getMemoryThrottleBytes();
++            while (used >= throttleBytes) {
 +                try {
-+                    LOGGER.warn("Throttling conversion until memory drops below 48 GB (currently {} MB)...", used / (1024 * 1024));
++                    LOGGER.warn("Throttling conversion until memory drops below 80% of max heap (currently {} MB)...", used / (1024 * 1024));
 +                    Thread.sleep(500);
 +                } catch (final InterruptedException e) {
 +                    Thread.currentThread().interrupt();
@@ -1412,6 +1421,7 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +                }
 +                System.gc();
 +                used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
++                throttleBytes = getMemoryThrottleBytes();
 +            }
 +        }
 +    }
