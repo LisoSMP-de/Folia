@@ -940,7 +940,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82c16581b4
 --- /dev/null
 +++ b/io/papermc/paper/linear/WorldFormatConverter.java
-@@ -0,0 +1,1021 @@
+@@ -0,0 +1,1022 @@
 +package io.papermc.paper.linear;
 +
 +import com.github.luben.zstd.ZstdInputStream;
@@ -987,13 +987,14 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 + * - Aborts with detailed message if conversion needed but automatic is false
 + * - Displays 30s countdown (configurable) with clean cancellation
 + * - Takes full world backup before conversion (non-recursive)
-+ * - Converts MCA <-> Linear with streaming directly to disk, throttling at 80% of max heap and full multi-threading
++ * - Converts MCA <-> Linear with streaming directly to disk, bounded memory (<= 12 GB limit) and full multi-threading
 + */
 +public final class WorldFormatConverter {
 +    private static final Logger LOGGER = LogUtils.getLogger();
 +    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
 +    private static final String CONVERSION_STATE_FILE = ".conversion-state";
-+    private static final long MEMORY_THROTTLE_BYTES = (long) (Runtime.getRuntime().maxMemory() * 0.8);
++    private static final long MAX_ALLOWED_MEMORY_BYTES = 12L * 1024 * 1024 * 1024; // 12 GB hard ceiling
++    private static final long MEMORY_THROTTLE_BYTES = 10L * 1024 * 1024 * 1024;   // 10 GB throttle trigger
 +
 +    public record WorldFolderTarget(
 +        String worldName,
@@ -1275,7 +1276,7 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +
 +        // Perform conversions
 +        final int threadCount = Math.max(1, Runtime.getRuntime().availableProcessors());
-+        LOGGER.info("Starting format conversion of {} files across {} threads (streaming directly to disk, memory limit: {} MB / 80% max heap)...", totalFiles, threadCount, MEMORY_THROTTLE_BYTES / (1024 * 1024));
++        LOGGER.info("Starting format conversion of {} files across {} threads (streaming directly to disk, memory limit: 12 GB)...", totalFiles, threadCount);
 +        final long startMs = System.currentTimeMillis();
 +
 +        final ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
@@ -1311,8 +1312,8 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +                            if (success) {
 +                                final int current = convertedCounter.incrementAndGet();
 +                                final long usedMb = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
-+                                LOGGER.info("Progress: {}/{} files converted ({}) [RAM: {} MB / {} MB]", current, totalFiles, srcFile.getFileName(), usedMb, MEMORY_THROTTLE_BYTES / (1024 * 1024));
-+                                if (current % 100 == 0 || usedMb >= MEMORY_THROTTLE_BYTES / (1024 * 1024)) {
++                                LOGGER.info("Progress: {}/{} files converted ({}) [RAM: {} MB / 12288 MB]", current, totalFiles, srcFile.getFileName(), usedMb);
++                                if (current % 100 == 0 || usedMb > 8000) {
 +                                    System.gc();
 +                                }
 +                            } else {
@@ -1363,7 +1364,7 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +    private static void checkMemoryPressure() {
 +        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 +        if (used >= MEMORY_THROTTLE_BYTES) {
-+            LOGGER.warn("Conversion memory pressure detected ({} MB used / {} MB limit). Triggering GC and throttling worker threads...", used / (1024 * 1024), MEMORY_THROTTLE_BYTES / (1024 * 1024));
++            LOGGER.warn("Conversion memory pressure detected ({} MB used / 12288 MB limit). Triggering GC and throttling worker threads...", used / (1024 * 1024));
 +            System.gc();
 +            try {
 +                Thread.sleep(250);
@@ -1371,7 +1372,7 @@ index 0000000000000000000000000000000000000000..3f568e9c58349e1746a3930e51112c82
 +            used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 +            while (used >= MEMORY_THROTTLE_BYTES) {
 +                try {
-+                    LOGGER.warn("Throttling conversion until memory drops below 80% of max heap (currently {} MB)...", used / (1024 * 1024));
++                    LOGGER.warn("Throttling conversion until memory drops below 10 GB (currently {} MB)...", used / (1024 * 1024));
 +                    Thread.sleep(500);
 +                } catch (final InterruptedException e) {
 +                    Thread.currentThread().interrupt();
