@@ -141,6 +141,11 @@ jobs:
     needs: [build-26-3, build-26-2, build-1-21-11]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Git Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -165,8 +170,8 @@ jobs:
       - name: Release All Jars
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: 26.3-latest
-          name: "Folia 26.3 Latest"
+          tag_name: folia-builds
+          name: "Folia Builds"
           files: release-jars/*
           make_latest: true
           overwrite: true
