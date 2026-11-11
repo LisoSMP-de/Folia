@@ -154,8 +154,10 @@ jobs:
       - name: Delete All Old Releases and Tags
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+          TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          for tag in $TAGS; do
             echo "Deleting release and tag: $tag"
             gh release delete "$tag" --yes --cleanup-tag || true
           done
