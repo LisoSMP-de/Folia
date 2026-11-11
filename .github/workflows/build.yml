@@ -47,13 +47,13 @@ jobs:
       - name: Prepare Artifact
         run: |
           mkdir -p release-jars
-          cp folia-server/build/libs/folia-paperclip-*.jar release-jars/folia-paperclip-26.3.jar
+          cp folia-server/build/libs/folia-paperclip-*.jar release-jars/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-jar-26.3
-          path: release-jars/folia-paperclip-26.3.jar
+          path: release-jars/folia-paperclip-*.jar
 
   build-26-2:
     runs-on: ubuntu-latest
@@ -88,13 +88,13 @@ jobs:
       - name: Prepare Artifact
         run: |
           mkdir -p release-jars
-          cp folia-server/build/libs/folia-paperclip-*.jar release-jars/folia-paperclip-26.2.jar
+          cp folia-server/build/libs/folia-paperclip-*.jar release-jars/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-jar-26.2
-          path: release-jars/folia-paperclip-26.2.jar
+          path: release-jars/folia-paperclip-*.jar
 
   build-1-21-11:
     runs-on: ubuntu-latest
@@ -129,13 +129,13 @@ jobs:
       - name: Prepare Artifact
         run: |
           mkdir -p release-jars
-          cp folia-server/build/libs/folia-paperclip-*-mojmap.jar release-jars/folia-paperclip-1.21.11.jar
+          cp folia-server/build/libs/folia-paperclip-*.jar release-jars/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-jar-1.21.11
-          path: release-jars/folia-paperclip-1.21.11.jar
+          path: release-jars/folia-paperclip-*.jar
 
   release:
     needs: [build-26-3, build-26-2, build-1-21-11]
@@ -147,11 +147,14 @@ jobs:
           path: release-jars
           merge-multiple: true
 
-      - name: Delete Old Release and Tag
+      - name: Delete All Old Releases and Tags
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete 26.3-latest --yes --cleanup-tag || true
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            echo "Deleting release and tag: $tag"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          : done
 
       - name: Release All Jars
         uses: softprops/action-gh-release@v2
