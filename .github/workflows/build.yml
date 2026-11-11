@@ -145,7 +145,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-jars
-          merge-multiple: true
+
+      - name: Flatten Artifacts Directory
+        run: |
+          find release-jars -mindepth 2 -type f -exec mv {} release-jars/ \;
+          rm -rf release-jars/release-jar-*
 
       - name: Delete All Old Releases and Tags
         env:
@@ -154,7 +158,7 @@ jobs:
           for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
             echo "Deleting release and tag: $tag"
             gh release delete "$tag" --yes --cleanup-tag || true
-          : done
+          done
 
       - name: Release All Jars
         uses: softprops/action-gh-release@v2
