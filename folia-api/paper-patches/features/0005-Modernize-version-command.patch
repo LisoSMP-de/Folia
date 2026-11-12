@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris <90093334+Chwitst187@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Modernize version command
+
+diff --git a/src/main/java/org/bukkit/command/defaults/VersionCommand.java b/src/main/java/org/bukkit/command/defaults/VersionCommand.java
+--- a/src/main/java/org/bukkit/command/defaults/VersionCommand.java
++++ b/src/main/java/org/bukkit/command/defaults/VersionCommand.java
+@@ -7,6 +7,7 @@
+ import com.google.gson.JsonObject;
+ import com.google.gson.JsonSyntaxException;
++import io.papermc.paper.ServerBuildInfo;
+ import java.io.BufferedReader;
+ import java.io.IOException;
+ import java.net.URL;
+ import java.net.URLEncoder;
+@@ -19,7 +20,6 @@
+ import java.util.Set;
+ import java.util.concurrent.locks.ReentrantLock;
+ import org.bukkit.Bukkit;
+-import org.bukkit.ChatColor;
+ import org.bukkit.command.CommandSender;
+ import org.bukkit.plugin.Plugin;
+ import org.bukkit.plugin.PluginDescriptionFile;
+@@ -27,12 +27,18 @@
+ import org.jetbrains.annotations.NotNull;
+ import com.destroystokyo.paper.util.VersionFetcher;
+ import net.kyori.adventure.text.Component;
+-import net.kyori.adventure.text.format.NamedTextColor;
++import net.kyori.adventure.text.JoinConfiguration;
++import net.kyori.adventure.text.TextComponent;
++import net.kyori.adventure.text.format.TextColor;
+ import net.kyori.adventure.text.event.ClickEvent;
+-import net.kyori.adventure.text.format.TextDecoration;
++import net.kyori.adventure.text.minimessage.MiniMessage;
+ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+ 
+ @Deprecated(forRemoval = true)
+ public class VersionCommand extends BukkitCommand {
++    private static final TextColor ACCENT = TextColor.color(0x38BDF8);
++    private static final TextColor MUTED = TextColor.color(0x94A3B8);
++    private static final TextColor TEXT = TextColor.color(0xF8FAFC);
++    private static final Component HEADER = MiniMessage.miniMessage().deserialize("<#334155><strikethrough>--------------------------------</strikethrough></#334155><newline><bold><gradient:#38BDF8:#1D2FC2>FOLIA</gradient></bold> <#64748B>/</#64748B> ");
+     private VersionFetcher versionFetcher; // Paper - version command 2.0
+     private VersionFetcher getVersionFetcher() { // lazy load because unsafe isn't available at command registration
+@@ -87,8 +93,9 @@
+             }
+ 
+             if (!found) {
+-                sender.sendMessage("This server is not running any plugin by that name.");
+-                sender.sendMessage("Use /plugins to get a list of plugins.");
++                sender.sendMessage(Component.text("Folia / No matching plugin found.", TextColor.color(0xFBBF24))
++                    .appendNewline()
++                    .append(Component.text("[Browse plugins]", ACCENT).clickEvent(ClickEvent.suggestCommand("/plugins"))));
+             }
+         }
+         return true;
+@@ -97,56 +104,42 @@
+     private void describeToSender(@NotNull Plugin plugin, @NotNull CommandSender sender) {
+         PluginDescriptionFile desc = plugin.getDescription();
+         // Paper start - version command 2.0
+-        sender.sendMessage(
+-            Component.text()
+-                .append(Component.text(desc.getName(), NamedTextColor.GREEN))
+-                .append(Component.text(" version "))
+-                .append(Component.text(desc.getVersion(), NamedTextColor.GREEN)
+-                    .hoverEvent(Component.text("Click to copy to clipboard", NamedTextColor.WHITE))
+-                    .clickEvent(ClickEvent.copyToClipboard(desc.getVersion()))
+-                )
+-        );
++        final TextComponent.Builder builder = Component.text()
++            .color(MUTED)
++            .append(HEADER)
++            .append(Component.text("PLUGIN INFO", TEXT))
++            .appendNewline()
++            .append(Component.text("Name     "))
++            .append(Component.text(desc.getName(), TEXT))
++            .appendNewline()
++            .append(Component.text("Version  "))
++            .append(Component.text(desc.getVersion(), ACCENT)
++                .hoverEvent(Component.translatable("chat.copy.click", TEXT))
++                .clickEvent(ClickEvent.copyToClipboard(desc.getVersion())));
+         // Paper end - version command 2.0
+         if (desc.getDescription() != null) {
+-            sender.sendMessage(desc.getDescription());
++            builder.appendNewline().append(Component.text(desc.getDescription(), TEXT));
+         }
+ 
+         if (desc.getWebsite() != null) {
+-            sender.sendMessage("Website: " + ChatColor.GREEN + desc.getWebsite());
++            builder.appendNewline().append(Component.text("Website: "))
++                .append(Component.text(desc.getWebsite(), ACCENT));
+         }
+ 
+         if (!desc.getAuthors().isEmpty()) {
+-            if (desc.getAuthors().size() == 1) {
+-                sender.sendMessage("Author: " + getNameList(desc.getAuthors()));
+-            } else {
+-                sender.sendMessage("Authors: " + getNameList(desc.getAuthors()));
+-            }
++            builder.appendNewline().append(Component.text(desc.getAuthors().size() == 1 ? "Author: " : "Authors: "))
++                .append(getNameList(desc.getAuthors()));
+         }
+ 
+         if (!desc.getContributors().isEmpty()) {
+-            sender.sendMessage("Contributors: " + getNameList(desc.getContributors()));
++            builder.appendNewline().append(Component.text("Contributors: ")).append(getNameList(desc.getContributors()));
+         }
++        sender.sendMessage(builder.build());
+     }
+ 
+     @NotNull
+-    private String getNameList(@NotNull final List<String> names) {
+-        StringBuilder result = new StringBuilder();
+-
+-        for (int i = 0; i < names.size(); i++) {
+-            if (result.length() > 0) {
+-                result.append(ChatColor.WHITE);
+-
+-                if (i < names.size() - 1) {
+-                    result.append(", ");
+-                } else {
+-                    result.append(" and ");
+-                }
+-            }
+-
+-            result.append(ChatColor.GREEN);
+-            result.append(names.get(i));
+-        }
+-
+-        return result.toString();
++    private Component getNameList(@NotNull final List<String> names) {
++        return Component.join(JoinConfiguration.separators(Component.text(", ", MUTED), Component.text(" and ", MUTED)),
++            names.stream().map(name -> Component.text(name, ACCENT)).toList());
+     }
+ 
+@@ -195,6 +188,6 @@
+             }
+             versionWaiters.add(sender);
+-            sender.sendMessage(Component.text("Checking version, please wait...", NamedTextColor.WHITE, TextDecoration.ITALIC)); // Paper
++            sender.sendMessage(Component.text("Folia / Checking for updates...", ACCENT)); // Paper
+             if (!versionTaskStarted) {
+                 versionTaskStarted = true;
+                 new Thread(new Runnable() {
+@@ -215,6 +208,6 @@
+         // Paper start
+         if (version.startsWith("null")) { // running from ide?
+-            setVersionMessage(Component.text("Unknown version, custom build?", NamedTextColor.YELLOW));
++            setVersionMessage(Component.text("Unknown version, custom build?", TextColor.color(0xFBBF24)));
+             return;
+         }
+         setVersionMessage(getVersionFetcher().getVersionMessage(version));
+@@ -256,15 +249,31 @@
+     private void setVersionMessage(final @NotNull Component msg) {
+         lastCheck = System.currentTimeMillis();
+-        final Component message = Component.textOfChildren(
+-            Component.text(Bukkit.getVersionMessage(), NamedTextColor.WHITE),
+-            Component.newline(),
+-            msg
+-        );
+-        this.versionMessage = Component.text()
+-            .append(message)
+-            .hoverEvent(Component.text("Click to copy to clipboard", NamedTextColor.WHITE))
+-            .clickEvent(ClickEvent.copyToClipboard(PlainTextComponentSerializer.plainText().serialize(message)))
++        final ServerBuildInfo build = ServerBuildInfo.buildInfo();
++        final Component message = Component.text()
++            .color(MUTED)
++            .append(HEADER)
++            .append(Component.text("SERVER INFO", TEXT))
++            .appendNewline()
++            .append(Component.text("Version  "))
++            .append(Component.text(build.asString(ServerBuildInfo.StringRepresentation.VERSION_SIMPLE), TEXT))
++            .appendNewline()
++            .append(Component.text("Branch   "))
++            .append(Component.text(build.gitBranch().orElse("unknown"), TEXT))
++            .appendNewline()
++            .append(Component.text("API      "))
++            .append(Component.text(Bukkit.getBukkitVersion(), TEXT))
++            .appendNewline()
++            .append(Component.text("Status   "))
++            .append(msg)
+             .build();
++        this.versionMessage = message.appendNewline()
++            .append(Component.text("[Copy info]", ACCENT)
++                .hoverEvent(Component.translatable("chat.copy.click", TEXT))
++                .clickEvent(ClickEvent.copyToClipboard(Bukkit.getVersionMessage() + "\n" + PlainTextComponentSerializer.plainText().serialize(message))))
++            .append(Component.text("  "))
++            .append(Component.text("[Source]", ACCENT)
++                .hoverEvent(Component.text("Open the Folia source repository", TEXT))
++                .clickEvent(ClickEvent.openUrl("https://github.com/LisoSMP-de/Folia")));
+         // Paper end
+         versionLock.lock();
+         try {
