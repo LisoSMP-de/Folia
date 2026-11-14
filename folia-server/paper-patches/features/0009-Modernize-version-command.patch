@@ -1,13 +1,12 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris <90093334+Chwitst187@users.noreply.github.com>
 Date: Thu, 12 Nov 2026 12:00:00 +0100
-Subject: [PATCH] Modernize version command
+Subject: [PATCH] Modernize version command with live hardware information
 
 diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/src/main/java/io/papermc/paper/command/PaperVersionCommand.java
 --- a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java
 +++ b/src/main/java/io/papermc/paper/command/PaperVersionCommand.java
-@@ -10,6 +10,7 @@
- import io.papermc.paper.InternalAPIBridge;
+@@ -11,5 +11,6 @@
 +import io.papermc.paper.ServerBuildInfo;
  import io.papermc.paper.command.brigadier.CommandSourceStack;
  import io.papermc.paper.command.brigadier.Commands;
@@ -48,6 +47,10 @@ diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/s
 +    private static final Component FAILED_TO_FETCH = Component.text("Folia / Version check unavailable. Try /version again.", TextColor.color(0xFB7185));
 +    private static final Component FETCHING = Component.text("Folia / Checking for updates...", ACCENT);
  
+@@ -49,2 +54,3 @@
+     private final VersionFetcher versionFetcher = CraftMagicNumbers.INSTANCE.getVersionFetcher();
++    private final CompletableFuture<Component> hardwareInfo = CompletableFuture.supplyAsync(PaperVersionCommand::hardwareInfo);
+     private CompletableFuture<ComputedVersion> computedVersion = CompletableFuture.completedFuture(new ComputedVersion(Component.empty(), -1)); // Precompute-- someday move that stuff out of bukkit
 @@ -96,9 +101,15 @@
          final PluginMeta meta = plugin.getPluginMeta();
  
@@ -89,7 +92,26 @@ diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/s
      }
  
      private int serverVersion(CommandContext<CommandSourceStack> context) {
-@@ -165,15 +176,34 @@
+@@ -147,9 +159,10 @@
+-        version.whenComplete((computedVersion, throwable) -> {
+-            if (computedVersion != null) {
+-                sender.sendMessage(computedVersion.message);
++        version.thenCombineAsync(this.hardwareInfo, (computedVersion, hardware) -> serverInfo(computedVersion.message, hardware))
++            .whenComplete((message, throwable) -> {
++                if (message != null) {
++                    sender.sendMessage(message);
++                } else if (throwable != null) {
++                    sender.sendMessage(FAILED_TO_FETCH);
++                    MinecraftServer.LOGGER.warn("Could not fetch version information!", throwable);
++                }
++            });
+-            } else if (throwable != null) {
+-                sender.sendMessage(FAILED_TO_FETCH);
+-                MinecraftServer.LOGGER.warn("Could not fetch version information!", throwable);
+-            }
+-        });
+     }
+@@ -165,19 +178,82 @@
      private CompletableFuture<ComputedVersion> fetchVersionMessage() {
         return CompletableFuture.supplyAsync(() -> {
 -           final Component message = Component.textOfChildren(
@@ -97,37 +119,187 @@ diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/s
 -               Component.newline(),
 -               this.versionFetcher.getVersionMessage()
 -           );
-+           final ServerBuildInfo build = ServerBuildInfo.buildInfo();
-+           final Component message = Component.text()
-+               .color(MUTED)
-+               .append(HEADER)
-+               .append(Component.text("SERVER INFO", TEXT))
-+               .appendNewline()
-+               .append(Component.text("Version  "))
-+               .append(Component.text(build.asString(ServerBuildInfo.StringRepresentation.VERSION_SIMPLE), TEXT))
-+               .appendNewline()
-+               .append(Component.text("Branch   "))
-+               .append(Component.text(build.gitBranch().orElse("unknown"), TEXT))
-+               .appendNewline()
-+               .append(Component.text("API      "))
-+               .append(Component.text(Bukkit.getBukkitVersion(), TEXT))
-+               .appendNewline()
-+               .append(Component.text("Status   "))
-+               .append(this.versionFetcher.getVersionMessage())
-+               .build();
- 
-            return new ComputedVersion(
+-
+-           return new ComputedVersion(
 -               message.hoverEvent(Component.translatable("chat.copy.click", NamedTextColor.WHITE))
 -                   .clickEvent(ClickEvent.copyToClipboard(PlainTextComponentSerializer.plainText().serialize(message))),
-+               message.appendNewline()
-+                   .append(Component.text("[Copy info]", ACCENT)
-+                       .hoverEvent(Component.translatable("chat.copy.click", TEXT))
-+                       .clickEvent(ClickEvent.copyToClipboard(Bukkit.getVersionMessage() + "\n" + PlainTextComponentSerializer.plainText().serialize(message))))
-+                   .append(Component.text("  "))
-+                   .append(Component.text("[Source]", ACCENT)
-+                       .hoverEvent(Component.text("Open the Folia source repository", TEXT))
-+                       .clickEvent(ClickEvent.openUrl("https://github.com/LisoSMP-de/Folia"))),
-                System.currentTimeMillis()
-            );
+-               System.currentTimeMillis()
+-           );
++           return new ComputedVersion(this.versionFetcher.getVersionMessage(), System.currentTimeMillis());
         });
      }
++
++    private static Component hardwareInfo() {
++        final TextComponent.Builder info = Component.text().color(MUTED);
++        try {
++            final oshi.hardware.HardwareAbstractionLayer hardware = new oshi.SystemInfo().getHardware();
++            try {
++                final oshi.hardware.CentralProcessor cpu = hardware.getProcessor();
++                info.append(Component.text("CPU      "))
++                    .append(Component.text(cpu.getProcessorIdentifier().getName().trim(), TEXT))
++                    .appendNewline()
++                    .append(Component.text("Cores    "))
++                    .append(Component.text(cpu.getPhysicalProcessorCount() + " cores / " + cpu.getLogicalProcessorCount() + " threads", TEXT));
++            } catch (RuntimeException | LinkageError unavailable) {
++                info.append(Component.text("CPU      N/A"));
++            }
++            info.appendNewline().append(Component.text("RAM      "));
++            try {
++                final oshi.hardware.GlobalMemory memory = hardware.getMemory();
++                info.append(Component.text(String.format(Locale.ROOT, "%.2f GB", memory.getTotal() / 1073741824.0D), TEXT));
++                String type = "N/A";
++                try {
++                    // ponytail: use OS-reported DIMM types; no privileged probing when unavailable.
++                    type = memory.getPhysicalMemory().stream()
++                        .map(oshi.hardware.PhysicalMemory::getMemoryType)
++                        .filter(value -> value != null && !value.isBlank() && !value.equalsIgnoreCase("unknown"))
++                        .distinct().sorted().collect(java.util.stream.Collectors.joining(" / "));
++                } catch (RuntimeException | LinkageError unavailable) {
++                    // DIMM information is often hidden in containers or without firmware access.
++                }
++                info.append(Component.text(" / " + (type.isBlank() ? "N/A" : type), TEXT));
++            } catch (RuntimeException | LinkageError unavailable) {
++                info.append(Component.text("N/A"));
++            }
++        } catch (RuntimeException | LinkageError unavailable) {
++            info.append(Component.text("Hardware N/A"));
++        }
++        return info.build();
++    }
++
++    private static Component serverInfo(final Component status, final Component hardware) {
++        final ServerBuildInfo build = ServerBuildInfo.buildInfo();
++        final Component message = Component.text()
++            .color(MUTED)
++            .append(HEADER)
++            .append(Component.text("SERVER INFO", TEXT))
++            .appendNewline()
++            .append(Component.text("Version  "))
++            .append(Component.text(build.asString(ServerBuildInfo.StringRepresentation.VERSION_SIMPLE), TEXT))
++            .appendNewline()
++            .append(Component.text("Branch   "))
++            .append(Component.text(build.gitBranch().orElse("unknown"), TEXT))
++            .appendNewline()
++            .append(Component.text("API      "))
++            .append(Component.text(Bukkit.getBukkitVersion(), TEXT))
++            .appendNewline()
++            .append(Component.text("Status   "))
++            .append(status)
++            .appendNewline()
++            .appendNewline()
++            .append(hardware)
++            .appendNewline()
++            .append(io.papermc.paper.threadedregions.FoliaStatusBarCommand.systemUsage())
++            .build();
+ 
++        return message.appendNewline()
++            .append(Component.text("[Copy info]", ACCENT)
++                .hoverEvent(Component.translatable("chat.copy.click", TEXT))
++                .clickEvent(ClickEvent.copyToClipboard(Bukkit.getVersionMessage() + "\n" + PlainTextComponentSerializer.plainText().serialize(message))))
++            .append(Component.text("  "))
++            .append(Component.text("[Source]", ACCENT)
++                .hoverEvent(Component.text("Open the Folia source repository", TEXT))
++                .clickEvent(ClickEvent.openUrl("https://github.com/LisoSMP-de/Folia")));
++    }
++
+     record ComputedVersion(Component message, long computedTime) {
+ 
+     }
+diff --git a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+--- a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
++++ b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+@@ -56,80 +56,32 @@
+         final Component updateMessage;
+         if (BUILD_INFO.buildNumber().isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
+-            updateMessage = text("You are running a development version without access to version information", color(0xFF5300));
++            updateMessage = text("Development build", color(0xFBBF24));
+         } else {
+             updateMessage = getUpdateStatusMessage();
+         }
+         final @Nullable Component history = this.getHistory();
+ 
+-        return history != null ? Component.textOfChildren(updateMessage, Component.newline(), history) : updateMessage;
++        return history != null ? updateMessage.hoverEvent(history) : updateMessage;
+     }
+ 
+     public static void getUpdateStatusStartupMessage() {
+-        int distance = DISTANCE_ERROR;
+-
+-        final OptionalInt buildNumber = BUILD_INFO.buildNumber();
+-        if (buildNumber.isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
+-            COMPONENT_LOGGER.warn(text("*** You are running a development version without access to version information ***"));
+-        } else {
+-            final Optional<MinecraftVersionFetcher> apiResult = fetchMinecraftVersionList();
+-            if (buildNumber.isPresent()) {
+-                distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
+-            } else {
+-                final Optional<String> gitBranch = BUILD_INFO.gitBranch();
+-                final Optional<String> gitCommit = BUILD_INFO.gitCommit();
+-                if (gitBranch.isPresent() && gitCommit.isPresent()) {
+-                    distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
+-                }
+-            }
+-
+-            switch (distance) {
+-                case DISTANCE_ERROR -> COMPONENT_LOGGER.error(text("*** Error obtaining version information! Cannot fetch version info ***"));
+-                case 0 -> apiResult.ifPresent(result -> {
+-                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
+-                    COMPONENT_LOGGER.warn(text("You are running the latest build for your Minecraft version (" + BUILD_INFO.minecraftVersionId() + ")"));
+-                    COMPONENT_LOGGER.warn(text("However, you are " + result.distance() + " release(s) behind the latest stable release (" + result.latestVersion() + ")!"));
+-                    COMPONENT_LOGGER.warn(text("It is recommended that you update as soon as possible"));
+-                    COMPONENT_LOGGER.warn(text(DOWNLOAD_PAGE));
+-                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
+-                });
+-                case DISTANCE_UNKNOWN -> COMPONENT_LOGGER.warn(text("*** You are running an unknown version! Cannot fetch version info ***"));
+-                default -> {
+-                    if (apiResult.isPresent()) {
+-                        COMPONENT_LOGGER.warn(text("*** You are running an outdated version of Minecraft, which is " + apiResult.get().distance() + " release(s) and " + distance + " build(s) behind!"));
+-                        COMPONENT_LOGGER.warn(text("*** Please update to the latest stable version on " + DOWNLOAD_PAGE + " ***"));
+-                    } else {
+-                        COMPONENT_LOGGER.info(text("*** Currently you are " + distance + " build(s) behind ***"));
+-                        COMPONENT_LOGGER.info(text("*** It is highly recommended to download the latest build from " + DOWNLOAD_PAGE + " ***"));
+-                    }
+-                }
+-            }
+-        }
++        COMPONENT_LOGGER.info(getUpdateStatusMessage());
+     }
+ 
+     private static Component getUpdateStatusMessage() {
+-        int distance = DISTANCE_ERROR;
+-
+-        final OptionalInt buildNumber = PaperVersionFetcher.BUILD_INFO.buildNumber();
+-        if (buildNumber.isPresent()) {
+-            distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
+-        } else {
+-            final Optional<String> gitBranch = PaperVersionFetcher.BUILD_INFO.gitBranch();
+-            final Optional<String> gitCommit = PaperVersionFetcher.BUILD_INFO.gitCommit();
+-            if (gitBranch.isPresent() && gitCommit.isPresent()) {
+-                distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
+-            }
+-        }
++        final Optional<String> branch = BUILD_INFO.gitBranch();
++        final Optional<String> commit = BUILD_INFO.gitCommit();
++        final int distance = branch.isPresent() && commit.isPresent()
++            ? fetchDistanceFromGitHub(branch.get(), commit.get()) : DISTANCE_UNKNOWN;
+ 
+         return switch (distance) {
+-            case DISTANCE_ERROR -> text("Error obtaining version information", NamedTextColor.YELLOW);
+-            case 0 -> text("You are running the latest version", NamedTextColor.GREEN);
+-            case DISTANCE_UNKNOWN -> text("Unknown version", NamedTextColor.YELLOW);
+-            default -> text("You are " + distance + " version(s) behind", NamedTextColor.YELLOW)
+-                .append(Component.newline())
+-                .append(text("Download the new version at: ")
+-                    .append(text(DOWNLOAD_PAGE, NamedTextColor.GOLD)
+-                        .hoverEvent(text("Click to open", NamedTextColor.WHITE))
+-                        .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE))));
++            case DISTANCE_ERROR -> text("Update check unavailable", color(0xFBBF24));
++            case 0 -> text("Up to date", color(0x55FF55));
++            case DISTANCE_UNKNOWN -> text("Untracked build", color(0xFBBF24));
++            default -> text(distance + (distance == 1 ? " commit behind" : " commits behind"), color(0xFBBF24))
++                .append(text("  [Update]", color(0x38BDF8))
++                    .hoverEvent(text("Open the Folia repository", NamedTextColor.WHITE))
++                    .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE)));
+         };
+     }
+ 
