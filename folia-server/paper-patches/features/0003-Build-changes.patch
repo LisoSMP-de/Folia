@@ -41,7 +41,7 @@ index 602d3ce2cd16405f35453ce12a207b70312a4a8a..7f8f36b98aadda5de7f1bf0a0d401620
      private static final int DISTANCE_UNKNOWN = -2;
 -    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/paper";
 -    private static final String REPOSITORY = "PaperMC/Paper";
-+    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/folia"; // Folia
++    private static final String DOWNLOAD_PAGE = "https://github.com/LisoSMP-de/Folia"; // Folia
 +    private static final String REPOSITORY = "LisoSMP-de/Folia"; // Folia
      private static final ServerBuildInfo BUILD_INFO = ServerBuildInfo.buildInfo();
      private static final String USER_AGENT = BUILD_INFO.brandName() + "/" + BUILD_INFO.asString(VERSION_SIMPLE) + " (https://papermc.io)";
