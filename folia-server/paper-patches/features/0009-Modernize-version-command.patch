@@ -48,7 +48,7 @@ diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/s
 +    private static final Component FETCHING = Component.text("Folia / Checking for updates...", ACCENT);
  
 @@ -49,2 +54,3 @@
-     private final VersionFetcher versionFetcher = CraftMagicNumbers.INSTANCE.getVersionFetcher();
+     private final VersionFetcher versionFetcher = InternalAPIBridge.get().getVersionFetcher();
 +    private final CompletableFuture<Component> hardwareInfo = CompletableFuture.supplyAsync(PaperVersionCommand::hardwareInfo);
      private CompletableFuture<ComputedVersion> computedVersion = CompletableFuture.completedFuture(new ComputedVersion(Component.empty(), -1)); // Precompute-- someday move that stuff out of bukkit
 @@ -96,9 +101,15 @@
@@ -205,101 +205,3 @@ diff --git a/src/main/java/io/papermc/paper/command/PaperVersionCommand.java b/s
      record ComputedVersion(Component message, long computedTime) {
  
      }
-diff --git a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
---- a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
-+++ b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
-@@ -56,80 +56,32 @@
-         final Component updateMessage;
-         if (BUILD_INFO.buildNumber().isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
--            updateMessage = text("You are running a development version without access to version information", color(0xFF5300));
-+            updateMessage = text("Development build", color(0xFBBF24));
-         } else {
-             updateMessage = getUpdateStatusMessage();
-         }
-         final @Nullable Component history = this.getHistory();
- 
--        return history != null ? Component.textOfChildren(updateMessage, Component.newline(), history) : updateMessage;
-+        return history != null ? updateMessage.hoverEvent(history) : updateMessage;
-     }
- 
-     public static void getUpdateStatusStartupMessage() {
--        int distance = DISTANCE_ERROR;
--
--        final OptionalInt buildNumber = BUILD_INFO.buildNumber();
--        if (buildNumber.isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
--            COMPONENT_LOGGER.warn(text("*** You are running a development version without access to version information ***"));
--        } else {
--            final Optional<MinecraftVersionFetcher> apiResult = fetchMinecraftVersionList();
--            if (buildNumber.isPresent()) {
--                distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
--            } else {
--                final Optional<String> gitBranch = BUILD_INFO.gitBranch();
--                final Optional<String> gitCommit = BUILD_INFO.gitCommit();
--                if (gitBranch.isPresent() && gitCommit.isPresent()) {
--                    distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
--                }
--            }
--
--            switch (distance) {
--                case DISTANCE_ERROR -> COMPONENT_LOGGER.error(text("*** Error obtaining version information! Cannot fetch version info ***"));
--                case 0 -> apiResult.ifPresent(result -> {
--                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
--                    COMPONENT_LOGGER.warn(text("You are running the latest build for your Minecraft version (" + BUILD_INFO.minecraftVersionId() + ")"));
--                    COMPONENT_LOGGER.warn(text("However, you are " + result.distance() + " release(s) behind the latest stable release (" + result.latestVersion() + ")!"));
--                    COMPONENT_LOGGER.warn(text("It is recommended that you update as soon as possible"));
--                    COMPONENT_LOGGER.warn(text(DOWNLOAD_PAGE));
--                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
--                });
--                case DISTANCE_UNKNOWN -> COMPONENT_LOGGER.warn(text("*** You are running an unknown version! Cannot fetch version info ***"));
--                default -> {
--                    if (apiResult.isPresent()) {
--                        COMPONENT_LOGGER.warn(text("*** You are running an outdated version of Minecraft, which is " + apiResult.get().distance() + " release(s) and " + distance + " build(s) behind!"));
--                        COMPONENT_LOGGER.warn(text("*** Please update to the latest stable version on " + DOWNLOAD_PAGE + " ***"));
--                    } else {
--                        COMPONENT_LOGGER.info(text("*** Currently you are " + distance + " build(s) behind ***"));
--                        COMPONENT_LOGGER.info(text("*** It is highly recommended to download the latest build from " + DOWNLOAD_PAGE + " ***"));
--                    }
--                }
--            }
--        }
-+        COMPONENT_LOGGER.info(getUpdateStatusMessage());
-     }
- 
-     private static Component getUpdateStatusMessage() {
--        int distance = DISTANCE_ERROR;
--
--        final OptionalInt buildNumber = PaperVersionFetcher.BUILD_INFO.buildNumber();
--        if (buildNumber.isPresent()) {
--            distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
--        } else {
--            final Optional<String> gitBranch = PaperVersionFetcher.BUILD_INFO.gitBranch();
--            final Optional<String> gitCommit = PaperVersionFetcher.BUILD_INFO.gitCommit();
--            if (gitBranch.isPresent() && gitCommit.isPresent()) {
--                distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
--            }
--        }
-+        final Optional<String> branch = BUILD_INFO.gitBranch();
-+        final Optional<String> commit = BUILD_INFO.gitCommit();
-+        final int distance = branch.isPresent() && commit.isPresent()
-+            ? fetchDistanceFromGitHub(branch.get(), commit.get()) : DISTANCE_UNKNOWN;
- 
-         return switch (distance) {
--            case DISTANCE_ERROR -> text("Error obtaining version information", NamedTextColor.YELLOW);
--            case 0 -> text("You are running the latest version", NamedTextColor.GREEN);
--            case DISTANCE_UNKNOWN -> text("Unknown version", NamedTextColor.YELLOW);
--            default -> text("You are " + distance + " version(s) behind", NamedTextColor.YELLOW)
--                .append(Component.newline())
--                .append(text("Download the new version at: ")
--                    .append(text(DOWNLOAD_PAGE, NamedTextColor.GOLD)
--                        .hoverEvent(text("Click to open", NamedTextColor.WHITE))
--                        .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE))));
-+            case DISTANCE_ERROR -> text("Update check unavailable", color(0xFBBF24));
-+            case 0 -> text("Up to date", color(0x55FF55));
-+            case DISTANCE_UNKNOWN -> text("Untracked build", color(0xFBBF24));
-+            default -> text(distance + (distance == 1 ? " commit behind" : " commits behind"), color(0xFBBF24))
-+                .append(text("  [Update]", color(0x38BDF8))
-+                    .hoverEvent(text("Open the Folia repository", NamedTextColor.WHITE))
-+                    .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE)));
-         };
-     }
- 
