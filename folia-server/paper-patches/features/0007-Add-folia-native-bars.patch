@@ -68,7 +68,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..6f1fe73cca9d41d442fdb661796af04e06a1d7b5
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/threadedregions/FoliaStatusBarCommand.java
-@@ -0,0 +1,681 @@
+@@ -0,0 +1,712 @@
 +package io.papermc.paper.threadedregions;
 +
 +import ca.spottedleaf.common.time.TickData;
@@ -265,6 +265,63 @@ index 0000000000000000000000000000000000000000..6f1fe73cca9d41d442fdb661796af04e
 +
 +    private static double smoothedCpuPercent = 0.0D;
 +    private static boolean hasSmoothed = false;
++    private static long lastCpuSample;
++
++    private static synchronized double sampleCpuPercent() {
++        final long now = System.nanoTime();
++        if (hasSmoothed && now - lastCpuSample < 1_000_000_000L) return smoothedCpuPercent;
++        try {
++            final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
++            if (!(baseOs instanceof com.sun.management.OperatingSystemMXBean os)) return Double.NaN;
++            final double load = os.getCpuLoad();
++            if (!Double.isFinite(load) || load < 0.0D) return Double.NaN;
++            final double raw = Math.min(1.0D, load) * HOST_CPUS * 100.0D;
++            smoothedCpuPercent = hasSmoothed ? 0.3D * raw + 0.7D * smoothedCpuPercent : raw;
++            hasSmoothed = true;
++            lastCpuSample = now;
++            return smoothedCpuPercent;
++        } catch (RuntimeException | LinkageError unavailable) {
++            return Double.NaN;
++        }
++    }
++
++    private static Component cpuUsageText(final double percent) {
++        if (!Double.isFinite(percent)) return Component.text("N/A", NamedTextColor.DARK_GRAY);
++        final double max = HOST_CPUS * 100.0D;
++        final String gradient = cpuGradient(percent / max);
++        return MiniMessage.miniMessage().deserialize(
++            gradient + String.format(Locale.ROOT, "%.2f", percent) + GRAD_END + "<gray>/</gray>"
++                + gradient + String.format(Locale.ROOT, "%.2f", max) + GRAD_END + " <gray>(</gray>"
++                + gradient + String.format(Locale.ROOT, "%.0f%%", percent / max * 100.0D) + GRAD_END + "<gray>)</gray>");
++    }
++
++    private static long memoryUsed(final MemoryUsage heap) {
++        return Math.max(0L, heap.getUsed()) + readNettyDirectMemory()
++            + Math.max(0L, ManagementFactory.getMemoryMXBean().getNonHeapMemoryUsage().getUsed());
++    }
++
++    private static long memoryMax(final MemoryUsage heap) {
++        return Math.max(1L, heap.getMax() > 0L ? heap.getMax() : Math.max(heap.getUsed(), heap.getCommitted()));
++    }
++
++    private static Component memoryUsageText(final long used, final long max) {
++        final double ratio = (double) used / max;
++        final String gradient = memGradient(ratio);
++        return MiniMessage.miniMessage().deserialize(
++            gradient + String.format(Locale.ROOT, "%.2fGB", used / 1073741824.0D) + GRAD_END
++                + "<yellow>/</yellow>" + GRAD_GREEN + String.format(Locale.ROOT, "%.2fGB", max / 1073741824.0D) + GRAD_END
++                + " <gray>(</gray>" + gradient + String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D) + GRAD_END + "<gray>)</gray>");
++    }
++
++    public static Component systemUsage() {
++        final MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
++        return Component.text("CPU load ", NamedTextColor.GRAY)
++            .append(cpuUsageText(sampleCpuPercent()))
++            .appendNewline()
++            .append(Component.text("Memory   ", NamedTextColor.GRAY))
++            .append(memoryUsageText(memoryUsed(heap), memoryMax(heap)))
++            .hoverEvent(Component.text("CPU: system load, 100% per logical CPU. Memory: heap + direct + non-heap / heap limit (not process RSS)."));
++    }
 +
 +    // --- shared gradient constants ---
 +    private static final String GRAD_GREEN  = "<gradient:#55ff55:#00aa00>";
@@ -648,29 +705,11 @@ index 0000000000000000000000000000000000000000..6f1fe73cca9d41d442fdb661796af04e
 +        final MiniMessage mm = MiniMessage.miniMessage();
 +        if (type == BarType.CPU) {
 +            final int procs = HOST_CPUS;
-+            double raw = 0.0;
-+            try {
-+                final java.lang.management.OperatingSystemMXBean baseOs = ManagementFactory.getOperatingSystemMXBean();
-+                if (baseOs instanceof com.sun.management.OperatingSystemMXBean os) {
-+                    final double cpuLoad = os.getCpuLoad();
-+                    if (cpuLoad >= 0.0D) {
-+                        raw = cpuLoad * procs * 100.0D;
-+                    }
-+                }
-+            } catch (final Throwable ignored) {}
-+            if (!hasSmoothed) {
-+                smoothedCpuPercent = raw;
-+                hasSmoothed = true;
-+            } else {
-+                smoothedCpuPercent = (0.3D * raw) + ((1.0D - 0.3D) * smoothedCpuPercent);
-+            }
++            final double percent = sampleCpuPercent();
 +            final double maxPercent = Math.max(1.0D, procs * 100.0D);
-+            final double ratio = Math.min(1.0D, Math.max(0.0D, smoothedCpuPercent / maxPercent));
++            final double ratio = Double.isFinite(percent) ? Math.clamp(percent / maxPercent, 0.0D, 1.0D) : 0.0D;
 +            final String g = cpuGradient(ratio);
 +            final StringBuilder sb = new StringBuilder();
-+            sb.append("<gray>CPU<gray>:</gray> ").append(g).append(String.format(Locale.ROOT, "%.2f", smoothedCpuPercent)).append(GRAD_END);
-+            sb.append("/").append(g).append(String.format(Locale.ROOT, "%.2f", maxPercent)).append(GRAD_END);
-+            sb.append(" (").append(g).append(String.format(Locale.ROOT, "%.0f%%", ratio * 100.0D)).append(GRAD_END).append(")");
 +            final double clockGhz = readCpuClockGhz();
 +            sb.append(" Clock<gray>:</gray> ");
 +            if (!Double.isNaN(clockGhz)) {
@@ -684,25 +723,17 @@ index 0000000000000000000000000000000000000000..6f1fe73cca9d41d442fdb661796af04e
 +                final String gT = tempGradient(tempC);
 +                sb.append(" Temp<gray>:</gray> ").append(gT).append(String.format(Locale.ROOT, "%.1f°C", tempC)).append(GRAD_END);
 +            }
-+            bar.name(mm.deserialize(sb.toString())).progress((float) ratio).color(barColorForGrad(g));
++            bar.name(Component.text("CPU: ", NamedTextColor.GRAY).append(cpuUsageText(percent)).append(mm.deserialize(sb.toString())))
++                .progress((float) ratio).color(barColorForGrad(g));
 +            return;
 +        }
 +        if (type == BarType.MEMORY) {
 +            final MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
-+            final long heapUsed = Math.max(0L, heap.getUsed());
-+            final long heapMax = heap.getMax() > 0L ? heap.getMax() : Math.max(heapUsed, heap.getCommitted());
-+            final long safeMax = Math.max(1L, heapMax);
-+
-+            final long nettyDirect = readNettyDirectMemory();
-+            final MemoryUsage nonHeap = ManagementFactory.getMemoryMXBean().getNonHeapMemoryUsage();
-+            final long nonHeapUsed = Math.max(0L, nonHeap.getUsed());
-+
-+            final long totalUsed = heapUsed + nettyDirect + nonHeapUsed;
++            final long safeMax = memoryMax(heap);
++            final long totalUsed = memoryUsed(heap);
 +            final double percent = (double) totalUsed / (double) safeMax;
 +            final String gUsed = memGradient(percent);
-+            final String usedStr = gUsed + String.format(Locale.ROOT, "%.2fGB", totalUsed / 1073741824.0D) + GRAD_END;
-+            final String maxStr = GRAD_GREEN + String.format(Locale.ROOT, "%.2fGB", safeMax / 1073741824.0D) + GRAD_END;
-+            final Component msg = mm.deserialize("<gray>Memory usage<gray>:</gray> " + usedStr + "<yellow>/</yellow>" + maxStr);
++            final Component msg = Component.text("Memory usage: ", NamedTextColor.GRAY).append(memoryUsageText(totalUsed, safeMax));
 +            bar.name(msg).progress((float) Math.clamp(percent, 0.0D, 1.0D)).color(barColorForGrad(gUsed));
 +            return;
 +        }
